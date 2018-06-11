@@ -183,18 +183,31 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
 
 
 /**
- * Send GroupCoordinatorRequest
+ * @brief Send FindCoordinatorRequest.
+ *
+ * @param coordkey is the group.id for RD_KAFKA_COORD_GROUP,
+ *                 and the ProducerId for RD_KAFKA_COORD_TXN
+ *
  */
-void rd_kafka_GroupCoordinatorRequest (rd_kafka_broker_t *rkb,
-                                       const rd_kafkap_str_t *cgrp,
-                                       rd_kafka_replyq_t replyq,
-                                       rd_kafka_resp_cb_t *resp_cb,
-                                       void *opaque) {
+void rd_kafka_FindCoordinatorRequest (rd_kafka_broker_t *rkb,
+                                      rd_kafka_coordtype_t coordtype,
+                                      const rd_kafkap_str_t *coordkey,
+                                      rd_kafka_replyq_t replyq,
+                                      rd_kafka_resp_cb_t *resp_cb,
+                                      void *opaque) {
         rd_kafka_buf_t *rkbuf;
+        int16_t ApiVersion = 0;
 
-        rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_GroupCoordinator, 1,
-                                         RD_KAFKAP_STR_SIZE(cgrp));
-        rd_kafka_buf_write_kstr(rkbuf, cgrp);
+        rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_FindCoordinator, 1,
+                                         1 + RD_KAFKAP_STR_SIZE(coordkey));
+        rd_kafka_buf_write_kstr(rkbuf, coordkey);
+
+        if (coordtype != RD_KAFKA_COORD_GROUP) {
+                rd_kafka_buf_write_i8(rkbuf, (int8_t)coordtype);
+                rd_kafka_buf_ApiVersion_set(rkbuf, 1, 0);
+        } else {
+                rd_kafka_buf_ApiVersion_set(rkbuf, 0, 0);
+        }
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
 }
@@ -3444,7 +3457,6 @@ rd_kafka_handle_InitProducerId (rd_kafka_t *rk,
         /* Retries are performed by idempotence state handler */
         rd_kafka_idemp_request_pid_failed(rkb, err);
 }
-
 
 /**
  * @brief Construct and send InitProducerIdRequest to \p rkb.

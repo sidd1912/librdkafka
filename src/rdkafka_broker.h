@@ -343,12 +343,13 @@ rd_kafka_broker_filter_non_idempotent (rd_kafka_broker_t *rkb, void *opaque) {
 
 
 /**
- * Filter out brokers that cant do GroupCoordinator requests right now.
+ * Filter out brokers that cant do FindCoordinator requests for
+ * groups right now.
  */
 static RD_INLINE RD_UNUSED int
-rd_kafka_broker_filter_can_group_query (rd_kafka_broker_t *rkb, void *opaque) {
+rd_kafka_broker_filter_can_coord_query (rd_kafka_broker_t *rkb, void *opaque) {
         return rd_atomic32_get(&rkb->rkb_blocking_request_cnt) > 0 ||
-		!(rkb->rkb_features & RD_KAFKA_FEATURE_BROKER_GROUP_COORD);
+                !(rkb->rkb_features & RD_KAFKA_FEATURE_BROKER_GROUP_COORD);
 }
 
 rd_kafka_broker_t *rd_kafka_broker_any (rd_kafka_t *rk, int state,

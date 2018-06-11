@@ -387,24 +387,27 @@ static int rd_kafka_cgrp_coord_update (rd_kafka_cgrp_t *rkcg,
 
 
 /**
- * Handle GroupCoordinator response
+ * Handle FindCoordinator response
  */
-static void rd_kafka_cgrp_handle_GroupCoordinator (rd_kafka_t *rk,
-						   rd_kafka_broker_t *rkb,
-                                                   rd_kafka_resp_err_t err,
-                                                   rd_kafka_buf_t *rkbuf,
-                                                   rd_kafka_buf_t *request,
-                                                   void *opaque) {
+static void rd_kafka_cgrp_handle_FindCoordinator (rd_kafka_t *rk,
+                                                  rd_kafka_broker_t *rkb,
+                                                  rd_kafka_resp_err_t err,
+                                                  rd_kafka_buf_t *rkbuf,
+                                                  rd_kafka_buf_t *request,
+                                                  void *opaque) {
         const int log_decode_errors = LOG_ERR;
         int16_t ErrorCode = 0;
         int32_t CoordId;
         rd_kafkap_str_t CoordHost = RD_ZERO_INIT;
         int32_t CoordPort;
+        rd_kafkap_str_t ErrorMsg = RD_ZERO_INIT;
         rd_kafka_cgrp_t *rkcg = opaque;
         struct rd_kafka_metadata_broker mdb = RD_ZERO_INIT;
 
         if (likely(!(ErrorCode = err))) {
                 rd_kafka_buf_read_i16(rkbuf, &ErrorCode);
+                if (request->rkbuf_reqhdr.ApiVersion == 1)
+                        rd_kafka_buf_read_str(rkbuf, &ErrorMsg);
                 rd_kafka_buf_read_i32(rkbuf, &CoordId);
                 rd_kafka_buf_read_str(rkbuf, &CoordHost);
                 rd_kafka_buf_read_i32(rkbuf, &CoordPort);
@@ -434,9 +437,11 @@ err_parse: /* Parse error */
 
 err2:
         rd_rkb_dbg(rkb, CGRP, "CGRPCOORD",
-                   "Group \"%.*s\" GroupCoordinator response error: %s",
+                   "Group \"%.*s\" FindCoordinator response error: %s%s%.*s",
                    RD_KAFKAP_STR_PR(rkcg->rkcg_group_id),
-                   rd_kafka_err2str(ErrorCode));
+                   rd_kafka_err2str(ErrorCode),
+                   RD_KAFKAP_STR_LEN(&ErrorMsg) > 0 ? ": " : "",
+                   RD_KAFKAP_STR_PR(&ErrorMsg));
 
         if (ErrorCode == RD_KAFKA_RESP_ERR__DESTROY)
                 return;
@@ -450,7 +455,7 @@ err2:
                         rd_kafka_q_op_err(rkcg->rkcg_q,
                                           RD_KAFKA_OP_CONSUMER_ERR,
                                           ErrorCode, 0, NULL, 0,
-                                          "GroupCoordinator response error: %s",
+                                          "FindCoordinator response error: %s",
                                           rd_kafka_err2str(ErrorCode));
 
                         /* Suppress repeated errors */
@@ -493,9 +498,10 @@ void rd_kafka_cgrp_coord_query (rd_kafka_cgrp_t *rkcg,
                    "Group \"%.*s\": querying for coordinator: %s",
                    RD_KAFKAP_STR_PR(rkcg->rkcg_group_id), reason);
 
-        rd_kafka_GroupCoordinatorRequest(rkb, rkcg->rkcg_group_id,
+        rd_kafka_FindCoordinatorRequest(rkb, rkcg->rkcg_group_id,
+                                        RD_KAFKA_COORD_GROUP,
                                          RD_KAFKA_REPLYQ(rkcg->rkcg_ops, 0),
-                                         rd_kafka_cgrp_handle_GroupCoordinator,
+                                         rd_kafka_cgrp_handle_FindCoordinator,
                                          rkcg);
 
         if (rkcg->rkcg_state == RD_KAFKA_CGRP_STATE_QUERY_COORD)
@@ -3149,7 +3155,7 @@ void rd_kafka_cgrp_serve (rd_kafka_cgrp_t *rkcg) {
                 break;
 
         case RD_KAFKA_CGRP_STATE_WAIT_COORD:
-                /* Waiting for GroupCoordinator response */
+                /* Waiting for FindCoordinator response */
                 break;
 
         case RD_KAFKA_CGRP_STATE_WAIT_BROKER:

@@ -2909,6 +2909,36 @@ class RD_EXPORT Producer : public virtual Handle {
                               * purging to finish. */
   };
 
+  /**
+   * Transactional API
+   *
+   * Requires Kafka broker version v0.11.0 or later
+   */
+
+  /**
+   * @brief
+   *
+   * @fixme blocking?
+   */
+  virtual ErrorCode initTransactions() = 0;
+
+  /**
+   * @fixme blocking?
+   */
+  virtual ErrorCode beginTransactions() = 0;
+
+  /**
+   * @fixme blocking?
+   */
+  virtual ErrorCode sendOffsetsToTransactions (std::vector<TopicPartition*> &offsets,
+                                               std::string group_id) = 0;
+
+  /**
+   * @brief
+   *
+   * @fixme blocking?
+   */
+  virtual ErrorCode commitTransaction() = 0;
 };
 
 /**@}*/
