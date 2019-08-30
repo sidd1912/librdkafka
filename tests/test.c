@@ -4090,7 +4090,7 @@ int test_waitpid (int pid) {
                           WTERMSIG(status));
                 return -1;
         } else if (WEXITSTATUS(status)) {
-                TEST_WARN("Process %d exit with status %d\n",
+                TEST_WARN("Process %d exited with status %d\n",
                           pid, WEXITSTATUS(status));
                 return -1;
         }
