@@ -35,6 +35,47 @@
 extern const char *rd_kafka_broker_state_names[];
 extern const char *rd_kafka_secproto_names[];
 
+
+/**
+ * @enum Broker states
+ */
+typedef	enum {
+        RD_KAFKA_BROKER_STATE_INIT,
+        RD_KAFKA_BROKER_STATE_DOWN,
+        RD_KAFKA_BROKER_STATE_TRY_CONNECT,
+        RD_KAFKA_BROKER_STATE_CONNECT,
+        RD_KAFKA_BROKER_STATE_AUTH_LEGACY,
+
+        /* Any state >= STATE_UP means the Kafka protocol layer
+         * is operational (to some degree). */
+        RD_KAFKA_BROKER_STATE_UP,
+        RD_KAFKA_BROKER_STATE_UPDATE,
+        RD_KAFKA_BROKER_STATE_APIVERSION_QUERY,
+        RD_KAFKA_BROKER_STATE_AUTH_HANDSHAKE,
+        RD_KAFKA_BROKER_STATE_AUTH_REQ,
+} rd_kafka_broker_state_t;
+
+/**
+ * @struct Broker state monitor.
+ *
+ * @warning The monitor object lifetime should be the same as
+ *          the rd_kafka_t object, not shorter.
+ */
+typedef struct rd_kafka_broker_monitor_s {
+        TAILQ_ENTRY(rd_kafka_broker_monitor_s) rkbmon_link; /**< rkb_monitors*/
+        struct rd_kafka_broker_s *rkbmon_rkb; /**< Broker being monitored. */
+        rd_kafka_q_t *rkbmon_q;               /**< Queue to enqueue op on. */
+
+        /**< Callback triggered on the monitoree's op handler thread.
+         *   Do note that the callback might be triggered even after
+         *   it has been deleted due to the queueing nature of op queues. */
+        void (*rkbmon_cb) (rd_kafka_broker_t *rkb);
+} rd_kafka_broker_monitor_t;
+
+
+/**
+ * @struct Broker instance
+ */
 struct rd_kafka_broker_s { /* rd_kafka_broker_t */
 	TAILQ_ENTRY(rd_kafka_broker_s) rkb_link;
 
@@ -84,21 +125,7 @@ struct rd_kafka_broker_s { /* rd_kafka_broker_t */
 	rd_ts_t             rkb_ts_fetch_backoff;
 	int                 rkb_fetching;
 
-	enum {
-		RD_KAFKA_BROKER_STATE_INIT,
-		RD_KAFKA_BROKER_STATE_DOWN,
-                RD_KAFKA_BROKER_STATE_TRY_CONNECT,
-		RD_KAFKA_BROKER_STATE_CONNECT,
-		RD_KAFKA_BROKER_STATE_AUTH_LEGACY,
-
-		/* Any state >= STATE_UP means the Kafka protocol layer
-		 * is operational (to some degree). */
-		RD_KAFKA_BROKER_STATE_UP,
-                RD_KAFKA_BROKER_STATE_UPDATE,
-		RD_KAFKA_BROKER_STATE_APIVERSION_QUERY,
-		RD_KAFKA_BROKER_STATE_AUTH_HANDSHAKE,
-                RD_KAFKA_BROKER_STATE_AUTH_REQ,
-	} rkb_state;
+        rd_kafka_broker_state_t rkb_state;       /**< Current broker state */
 
         rd_ts_t             rkb_ts_state;        /* Timestamp of last
                                                   * state change */
@@ -245,11 +272,17 @@ struct rd_kafka_broker_s { /* rd_kafka_broker_t */
                 int internal;
 
                 /**< Consumer: Broker is the group coordinator.
-                 *
                  *   Counter is maintained by cgrp logic in
-                 *   rdkafka main thread. */
+                 *   rdkafka main thread.
+                 *
+                 *   Producer: Broker is the transaction coordinator.
+                 *   Counter is maintained by rdkafka_idemp.c. */
                 rd_atomic32_t coord;
         } rkb_persistconn;
+
+        /**< Currently registered state monitors.
+         *   @locks rkb_lock */
+        TAILQ_HEAD(, rd_kafka_broker_monitor_s) rkb_monitors;
 
 	rd_kafka_secproto_t rkb_proto;
 
@@ -282,11 +315,42 @@ struct rd_kafka_broker_s { /* rd_kafka_broker_t */
 
 
 /**
+ * @brief Locks broker, acquires the states, unlocks, and returns
+ *        the state.
+ * @locks !broker_lock
+ * @locality any
+ */
+static RD_INLINE RD_UNUSED
+rd_kafka_broker_state_t rd_kafka_broker_get_state (rd_kafka_broker_t *rkb) {
+        rd_kafka_broker_state_t state;
+        rd_kafka_broker_lock(rkb);
+        state = rkb->rkb_state;
+        rd_kafka_broker_unlock(rkb);
+        return state;
+}
+
+
+
+
+/**
  * @returns true if the broker state is UP or UPDATE
  */
 #define rd_kafka_broker_state_is_up(state)              \
         ((state) == RD_KAFKA_BROKER_STATE_UP ||         \
          (state) == RD_KAFKA_BROKER_STATE_UPDATE)
+
+
+/**
+ * @returns true if the broker connection is up, else false.
+ * @locks none
+ * @locality any
+ */
+static RD_UNUSED RD_INLINE rd_bool_t
+rd_kafka_broker_is_up (rd_kafka_broker_t *rkb) {
+        rd_kafka_broker_state_t state = rd_kafka_broker_get_state(rkb);
+        return rd_kafka_broker_state_is_up(state);
+}
+
 
 /**
  * @brief Broker comparator
@@ -314,8 +378,6 @@ int16_t rd_kafka_broker_ApiVersion_supported (rd_kafka_broker_t *rkb,
                                               int16_t ApiKey,
                                               int16_t minver, int16_t maxver,
                                               int *featuresp);
-
-int rd_kafka_broker_get_state (rd_kafka_broker_t *rkb);
 
 rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0 (rd_kafka_t *rk,
                                                     int32_t nodeid,
@@ -495,6 +557,13 @@ void
 rd_kafka_broker_persistent_connection_del (rd_kafka_broker_t *rkb,
                                            rd_atomic32_t *acntp);
 
+
+void rd_kafka_broker_monitor_add (rd_kafka_broker_monitor_t *rkbmon,
+                                  rd_kafka_broker_t *rkb,
+                                  rd_kafka_q_t *rkq,
+                                  void (*callback) (rd_kafka_broker_t *rkb));
+
+void rd_kafka_broker_monitor_del (rd_kafka_broker_monitor_t *rkbmon);
 
 int unittest_broker (void);
 

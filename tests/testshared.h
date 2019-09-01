@@ -73,7 +73,69 @@ test_produce_msgs_easy_size (const char *topic, uint64_t testid,
 #define test_produce_msgs_easy(topic,testid,partition,msgcnt) \
         test_produce_msgs_easy_size(topic,testid,partition,msgcnt,0)
 
-void test_FAIL (const char *file, int line, int fail_now, const char *str);
+
+void test_fail0 (const char *file, int line, const char *function,
+                 int do_lock, int fail_now, const char *fmt, ...);
+
+
+
+void test_fail0 (const char *file, int line, const char *function,
+                 int do_lock, int fail_now, const char *fmt, ...);
+
+#define TEST_FAIL0(file,line,do_lock,fail_now,...)   \
+        test_fail0(__FILE__, __LINE__, __FUNCTION__, \
+                   do_lock, fail_now, __VA_ARGS__)
+
+/* Whine and abort test */
+#define TEST_FAIL(...) TEST_FAIL0(__FILE__,__LINE__,1,1,__VA_ARGS__)
+
+/* Whine right away, mark the test as failed, but continue the test. */
+#define TEST_FAIL_LATER(...) TEST_FAIL0(__FILE__,__LINE__,1,0,__VA_ARGS__)
+
+/* Whine right away, maybe mark the test as failed, but continue the test. */
+#define TEST_FAIL_LATER0(LATER,...) TEST_FAIL0(__FILE__,__LINE__,1,!(LATER),__VA_ARGS__)
+
+#define TEST_FAILCNT()  (test_curr->failcnt)
+
+#define TEST_LATER_CHECK(...) do {                              \
+        if (test_curr->state == TEST_FAILED)                    \
+                TEST_FAIL("See previous errors. " __VA_ARGS__); \
+        } while (0)
+
+#define TEST_PERROR(call) do {                                         \
+               if (!(call))                                            \
+                       TEST_FAIL(#call " failed: %s", rd_strerror(errno)); \
+       } while (0)
+
+#define TEST_WARN(...) do {                                              \
+                fprintf(stderr, "\033[33m[%-28s/%7.3fs] WARN: ",       \
+                       test_curr->name,                                \
+                       test_curr->start ?                              \
+                       ((float)(test_clock() -                         \
+                                 test_curr->start)/1000000.0f) : 0);    \
+               fprintf(stderr, __VA_ARGS__);                           \
+                fprintf(stderr, "\033[0m");                             \
+       } while (0)
+
+/* "..." is a failure reason in printf format, include as much info as needed */
+#define TEST_ASSERT(expr,...) do {            \
+        if (!(expr)) {                        \
+                      TEST_FAIL("Test assertion failed: \"" # expr  "\": " \
+                                __VA_ARGS__);                           \
+                      }                                                 \
+        } while (0)
+
+
+/* "..." is a failure reason in printf format, include as much info as needed */
+#define TEST_ASSERT_LATER(expr,...) do {                                \
+                if (!(expr)) {                                          \
+                        TEST_FAIL0(__FILE__, __LINE__, 1, 0,            \
+                                   "Test assertion failed: \"" # expr  "\": " \
+                                   __VA_ARGS__);                        \
+                }                                                       \
+        } while (0)
+
+
 void test_SAY (const char *file, int line, int level, const char *str);
 void test_SKIP (const char *file, int line, const char *str);
 

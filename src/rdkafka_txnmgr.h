@@ -1,7 +1,7 @@
 /*
  * librdkafka - Apache Kafka C library
  *
- * Copyright (c) 2018 Magnus Edenhill
+ * Copyright (c) 2019 Magnus Edenhill
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,28 +29,117 @@
 #ifndef _RDKAFKA_TXNMGR_H_
 #define _RDKAFKA_TXNMGR_H_
 
-
-typedef enum rd_kafka_txn_state_t {
-        RD_KAFKA_TXN_STATE_UNINITIALIZED,
-        RD_KAFKA_TXN_STATE_INITIALIZING,
-        RD_KAFKA_TXN_STATE_READY,
-        RD_KAFKA_TXN_STATE_IN_TRANSACTION,
-        RD_KAFKA_TXN_STATE_COMMITTING_TRANSACTION,
-        RD_KAFKA_TXN_STATE_ABORTING_TRANSACTION,
-        RD_KAFKA_TXN_STATE_ABORTABLE_ERROR,
-        RD_KAFKA_TXN_STATE_FATAL_ERROR,
-} rd_kafka_txn_state_t;
-
-
-typedef struct rd_kafka_PidEpoch_s {
-        int32_t pid;   /**< ProducerId */
-        int16_t epoch; /**< Epoch */
-} rd_kafka_PidEpoch_t;
+/**
+ * @returns true if transaction state allows enqueuing new messages
+ *          (i.e., produce()), else false.
+ *
+ * @locality application thread
+ * @locks none
+ */
+static RD_INLINE RD_UNUSED rd_bool_t
+rd_kafka_txn_may_enq_msg (rd_kafka_t *rk) {
+        return !rd_kafka_is_transactional(rk) ||
+                rd_atomic32_get(&rk->rk_eos.txn_may_enq);
+}
 
 
-struct rd_kafka_txn {
-        rd_kafka_txn_state_t state;
-        rd_kafka_PidEpoch_t PidEpoch;
-};
+/**
+ * @returns true if transaction state allows sending messages to broker,
+ *          else false.
+ *
+ * @locality broker thread
+ * @locks none
+ */
+static RD_INLINE RD_UNUSED rd_bool_t
+rd_kafka_txn_may_send_msg (rd_kafka_t *rk) {
+        rd_bool_t ret;
 
+        rd_kafka_wrlock(rk);
+        ret = (rk->rk_eos.txn_state == RD_KAFKA_TXN_STATE_IN_TRANSACTION ||
+               rk->rk_eos.txn_state == RD_KAFKA_TXN_STATE_BEGIN_COMMIT);
+        rd_kafka_wrunlock(rk);
+
+        return ret;
+}
+
+
+/**
+ * @returns true if transaction and partition state allows sending queued
+ *          messages to broker, else false.
+ *
+ * @locality any
+ * @locks toppar_lock MUST be held
+ */
+static RD_INLINE RD_UNUSED rd_bool_t
+rd_kafka_txn_toppar_may_send_msg (rd_kafka_toppar_t *rktp) {
+        if (likely(rktp->rktp_flags & RD_KAFKA_TOPPAR_F_IN_TXN))
+                return rd_true;
+
+        return rd_false;
+}
+
+
+
+void rd_kafka_txn_schedule_register_partitions (rd_kafka_t *rk,
+                                                int backoff_ms);
+
+
+/**
+ * @brief Add partition to transaction (unless already added).
+ *
+ * The partition will first be added to the pending list (txn_pending_rktps)
+ * awaiting registration on the coordinator with AddPartitionsToTxnRequest.
+ * On successful registration the partition is flagged as IN_TXN and removed
+ * from the pending list.
+ *
+ * @locality application thread
+ * @locks none
+ */
+static RD_INLINE RD_UNUSED
+void rd_kafka_txn_add_partition (rd_kafka_toppar_t *rktp) {
+        rd_kafka_t *rk;
+        rd_bool_t schedule = rd_false;
+
+        rd_kafka_toppar_lock(rktp);
+
+        /* Already added or registered */
+        if (likely(rktp->rktp_flags &
+                   (RD_KAFKA_TOPPAR_F_PEND_TXN | RD_KAFKA_TOPPAR_F_IN_TXN))) {
+                rd_kafka_toppar_unlock(rktp);
+                return;
+        }
+
+        rktp->rktp_flags |= RD_KAFKA_TOPPAR_F_PEND_TXN;
+
+        rd_kafka_toppar_unlock(rktp);
+
+        rk = rktp->rktp_rkt->rkt_rk;
+
+        // FIXME: refcnt of rktp?
+
+        mtx_lock(&rk->rk_eos.txn_pending_lock);
+        schedule = TAILQ_EMPTY(&rk->rk_eos.txn_pending_rktps);
+
+        /* List is sorted by topic name since AddPartitionsToTxnRequest()
+         * requires it. */
+        TAILQ_INSERT_SORTED(&rk->rk_eos.txn_pending_rktps, rktp,
+                            rd_kafka_toppar_t *, rktp_txnlink,
+                            rd_kafka_toppar_topic_cmp);
+        mtx_unlock(&rk->rk_eos.txn_pending_lock);
+
+        /* Schedule registration of partitions by the rdkafka main thread */
+        if (unlikely(schedule))
+                rd_kafka_txn_schedule_register_partitions(
+                        rk, rd_true/*immediate*/);
+}
+
+
+
+
+void rd_kafka_txn_idemp_state_change (rd_kafka_t *rk,
+                                      rd_kafka_idemp_state_t state);
+
+
+void rd_kafka_txns_term (rd_kafka_t *rk);
+void rd_kafka_txns_init (rd_kafka_t *rk);
 #endif /* _RDKAFKA_TXNMGR_H_ */

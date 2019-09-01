@@ -197,6 +197,7 @@ _TEST_DECL(0097_ssl_verify);
 _TEST_DECL(0098_consumer_txn);
 _TEST_DECL(0099_commit_metadata);
 _TEST_DECL(0100_thread_interceptors);
+_TEST_DECL(0101_transactions);
 
 /* Manual tests */
 _TEST_DECL(8000_idle);
@@ -326,6 +327,7 @@ struct test tests[] = {
         _TEST(0098_consumer_txn, 0),
         _TEST(0099_commit_metadata, 0),
         _TEST(0100_thread_interceptors, TEST_F_LOCAL),
+        _TEST(0101_transactions, 0, TEST_BRKVER(0,11,0,0)),
 
         /* Manual tests */
         _TEST(8000_idle, TEST_F_MANUAL),
@@ -739,8 +741,8 @@ void test_conf_init (rd_kafka_conf_t **conf, rd_kafka_topic_conf_t **topic_conf,
         if (conf) {
                 *conf = rd_kafka_conf_new();
                 rd_kafka_conf_set(*conf, "client.id", test_curr->name, NULL, 0);
-                test_conf_set(*conf, "enable.idempotence",
-                              test_idempotent_producer ? "true" : "false");
+                if (test_idempotent_producer)
+                        test_conf_set(*conf, "enable.idempotence", "true");
                 rd_kafka_conf_set_error_cb(*conf, test_error_cb);
                 rd_kafka_conf_set_stats_cb(*conf, test_stats_cb);
 
@@ -1650,7 +1652,8 @@ void test_dr_msg_cb (rd_kafka_t *rk, const rd_kafka_message_t *rkmessage,
                   status_names[rd_kafka_message_status(rkmessage)]);
 
         if (!test_curr->produce_sync) {
-                if (rkmessage->err != test_curr->exp_dr_err)
+                if (!test_curr->ignore_dr_err &&
+                    rkmessage->err != test_curr->exp_dr_err)
                         TEST_FAIL("Message delivery failed: expected %s, got %s",
                                   rd_kafka_err2str(test_curr->exp_dr_err),
                                   rd_kafka_err2str(rkmessage->err));
@@ -1923,6 +1926,41 @@ void test_produce_msgs (rd_kafka_t *rk, rd_kafka_topic_t *rkt,
                                  payload, size, 0, &remains);
 
         test_wait_delivery(rk, &remains);
+}
+
+
+/**
+ * @brief Produces \p cnt messages and waits for succesful delivery
+ */
+void test_produce_msgs2 (rd_kafka_t *rk, const char *topic,
+                         uint64_t testid, int32_t partition,
+                         int msg_base, int cnt,
+                         const char *payload, size_t size) {
+        int remains = 0;
+        rd_kafka_topic_t *rkt = test_create_topic_object(rk, topic, NULL);
+
+        test_produce_msgs_nowait(rk, rkt, testid, partition, msg_base, cnt,
+                                 payload, size, 0, &remains);
+
+        test_wait_delivery(rk, &remains);
+
+        rd_kafka_topic_destroy(rkt);
+}
+
+/**
+ * @brief Produces \p cnt messages without waiting for delivery.
+ */
+void test_produce_msgs2_nowait (rd_kafka_t *rk, const char *topic,
+                                uint64_t testid, int32_t partition,
+                                int msg_base, int cnt,
+                                const char *payload, size_t size,
+                                int *remainsp) {
+        rd_kafka_topic_t *rkt = test_create_topic_object(rk, topic, NULL);
+
+        test_produce_msgs_nowait(rk, rkt, testid, partition, msg_base, cnt,
+                                 payload, size, 0, remainsp);
+
+        rd_kafka_topic_destroy(rkt);
 }
 
 
@@ -2256,6 +2294,41 @@ test_consume_msgs_easy (const char *group_id, const char *topic,
                                   exp_msgcnt, tconf, &mv);
 
         test_msgver_clear(&mv);
+}
+
+
+/**
+ * @brief Waits for up to \p timeout_ms for consumer to receive assignment.
+ *        If no assignment received without the timeout the test fails.
+ */
+void test_consumer_wait_assignment (rd_kafka_t *rk) {
+        rd_kafka_topic_partition_list_t *assignment = NULL;
+        int i;
+
+        while (1) {
+                rd_kafka_resp_err_t err;
+
+                err = rd_kafka_assignment(rk, &assignment);
+                TEST_ASSERT(!err, "rd_kafka_assignment() failed: %s",
+                            rd_kafka_err2str(err));
+
+                if (assignment->cnt > 0)
+                        break;
+
+                rd_kafka_topic_partition_list_destroy(assignment);
+
+                test_consumer_poll_once(rk, NULL, 1000);
+        }
+
+        TEST_SAY("Assignment (%d partition(s)): ", assignment->cnt);
+        for (i = 0 ; i < assignment->cnt ; i++)
+                TEST_SAY0("%s%s[%"PRId32"]",
+                          i == 0 ? "" : ", ",
+                          assignment->elems[i].topic,
+                          assignment->elems[i].partition);
+        TEST_SAY0("\n");
+
+        rd_kafka_topic_partition_list_destroy(assignment);
 }
 
 
@@ -4240,10 +4313,6 @@ rd_kafka_event_t *test_wait_event (rd_kafka_queue_t *eventq,
 	return NULL;
 }
 
-
-void test_FAIL (const char *file, int line, int fail_now, const char *str) {
-        TEST_FAIL0(file, line, 1/*lock*/, fail_now, "%s", str);
-}
 
 void test_SAY (const char *file, int line, int level, const char *str) {
         TEST_SAYL(level, "%s", str);

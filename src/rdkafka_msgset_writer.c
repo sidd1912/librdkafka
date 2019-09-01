@@ -1260,6 +1260,10 @@ rd_kafka_msgset_writer_finalize_MessageSet_v2_header (
 
         msetw->msetw_Attributes |= RD_KAFKA_MSG_ATTR_CREATE_TIME;
 
+        if (rd_kafka_is_transactional(msetw->msetw_rkb->rkb_rk))
+                msetw->msetw_Attributes |=
+                        RD_KAFKA_MSGSET_V2_ATTR_TRANSACTIONAL;
+
         rd_kafka_buf_update_i16(rkbuf, msetw->msetw_of_start +
                                 RD_KAFKAP_MSGSET_V2_OF_Attributes,
                                 msetw->msetw_Attributes);

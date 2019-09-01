@@ -1241,6 +1241,53 @@ class ProducerImpl : virtual public Producer, virtual public HandleImpl {
                                                                 (int)purge_flags));
   }
 
+  ErrorCode init_transactions (std::string &errstr) {
+          rd_kafka_resp_err_t c_err;
+          char errbuf[512];
+
+          c_err = rd_kafka_init_transactions(rk_, errbuf, sizeof(errbuf));
+          if (c_err)
+                  errstr = errbuf;
+
+          return static_cast<ErrorCode>(c_err);
+  }
+
+  ErrorCode begin_transaction (std::string &errstr) {
+          rd_kafka_resp_err_t c_err;
+          char errbuf[512];
+
+          c_err = rd_kafka_begin_transaction(rk_, errbuf, sizeof(errbuf));
+          if (c_err)
+                  errstr = errbuf;
+
+          return static_cast<ErrorCode>(c_err);
+
+  }
+
+  ErrorCode commit_transaction (std::string &errstr) {
+          rd_kafka_resp_err_t c_err;
+          char errbuf[512];
+
+          c_err = rd_kafka_commit_transaction(rk_, errbuf, sizeof(errbuf));
+          if (c_err)
+                  errstr = errbuf;
+
+          return static_cast<ErrorCode>(c_err);
+
+  }
+
+  ErrorCode abort_transaction (std::string &errstr) {
+          rd_kafka_resp_err_t c_err;
+          char errbuf[512];
+
+          c_err = rd_kafka_abort_transaction(rk_, errbuf, sizeof(errbuf));
+          if (c_err)
+                  errstr = errbuf;
+
+          return static_cast<ErrorCode>(c_err);
+
+  }
+
   static Producer *create (Conf *conf, std::string &errstr);
 
 };

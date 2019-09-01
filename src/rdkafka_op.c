@@ -80,7 +80,9 @@ const char *rd_kafka_op2str (rd_kafka_op_type_t type) {
                 [RD_KAFKA_OP_ADMIN_RESULT] = "REPLY:ADMIN_RESULT",
                 [RD_KAFKA_OP_PURGE] = "REPLY:PURGE",
                 [RD_KAFKA_OP_CONNECT] = "REPLY:CONNECT",
-                [RD_KAFKA_OP_OAUTHBEARER_REFRESH] = "REPLY:OAUTHBEARER_REFRESH"
+                [RD_KAFKA_OP_OAUTHBEARER_REFRESH] = "REPLY:OAUTHBEARER_REFRESH",
+                [RD_KAFKA_OP_BROKER_MONITOR] = "REPLY:BROKER_MONITOR",
+                [RD_KAFKA_OP_TXN] = "REPLY:TXN",
         };
 
         if (type & RD_KAFKA_OP_REPLY)
@@ -203,6 +205,8 @@ rd_kafka_op_t *rd_kafka_op_new0 (const char *source, rd_kafka_op_type_t type) {
                 [RD_KAFKA_OP_PURGE] = sizeof(rko->rko_u.purge),
                 [RD_KAFKA_OP_CONNECT] = 0,
                 [RD_KAFKA_OP_OAUTHBEARER_REFRESH] = 0,
+                [RD_KAFKA_OP_BROKER_MONITOR] = sizeof(rko->rko_u.broker_monitor),
+                [RD_KAFKA_OP_TXN] = sizeof(rko->rko_u.txn),
 	};
 	size_t tsize = op2size[type & ~RD_KAFKA_OP_FLAGMASK];
 
@@ -323,6 +327,14 @@ void rd_kafka_op_destroy (rd_kafka_op_t *rko) {
                 RD_IF_FREE(rko->rko_u.admin_result.errstr, rd_free);
                 break;
 
+        case RD_KAFKA_OP_BROKER_MONITOR:
+                rd_kafka_broker_destroy(rko->rko_u.broker_monitor.rkb);
+                break;
+
+        case RD_KAFKA_OP_TXN:
+                RD_IF_FREE(rko->rko_u.txn.errstr, rd_free);
+                break;
+
 	default:
 		break;
 	}
@@ -398,11 +410,9 @@ rd_kafka_op_t *rd_kafka_op_new_reply (rd_kafka_op_t *rko_orig,
 				      rd_kafka_resp_err_t err) {
         rd_kafka_op_t *rko;
 
-        rko = rd_kafka_op_new(rko_orig->rko_type |
-			      (rko_orig->rko_op_cb ?
-			       RD_KAFKA_OP_CB : RD_KAFKA_OP_REPLY));
+        rd_kafka_op_clear_cb(rko_orig);
+        rko = rd_kafka_op_new(rko_orig->rko_type | RD_KAFKA_OP_REPLY);
 	rd_kafka_op_get_reply_version(rko, rko_orig);
-	rko->rko_op_cb   = rko_orig->rko_op_cb;
 	rko->rko_err     = err;
 	if (rko_orig->rko_rktp)
 		rko->rko_rktp = rd_kafka_toppar_keep(
@@ -522,6 +532,7 @@ rd_kafka_resp_err_t rd_kafka_op_err_destroy (rd_kafka_op_t *rko) {
 rd_kafka_op_res_t rd_kafka_op_call (rd_kafka_t *rk, rd_kafka_q_t *rkq,
                                     rd_kafka_op_t *rko) {
         rd_kafka_op_res_t res;
+        rd_assert(rko->rko_op_cb);
         res = rko->rko_op_cb(rk, rkq, rko);
         if (unlikely(res == RD_KAFKA_OP_RES_YIELD || rd_kafka_yield_thread))
                 return RD_KAFKA_OP_RES_YIELD;
@@ -621,7 +632,7 @@ rd_kafka_op_handle_std (rd_kafka_t *rk, rd_kafka_q_t *rkq,
                 return RD_KAFKA_OP_RES_PASS;
         else if (cb_type != RD_KAFKA_Q_CB_EVENT &&
                  rko->rko_type & RD_KAFKA_OP_CB)
-                return rd_kafka_op_call(rk, rkq, rko);
+                return rko->rko_op_cb(rk, rkq, rko);
         else if (rko->rko_type == RD_KAFKA_OP_RECV_BUF) /* Handle Response */
                 rd_kafka_buf_handle_op(rko, rko->rko_err);
         else if (cb_type != RD_KAFKA_Q_CB_RETURN &&
@@ -654,6 +665,13 @@ rd_kafka_op_handle (rd_kafka_t *rk, rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
                     rd_kafka_q_serve_cb_t *callback) {
         rd_kafka_op_res_t res;
 
+        if (rko->rko_serve) {
+                callback = rko->rko_serve;
+                opaque   = rko->rko_serve_opaque;
+                rko->rko_serve        = NULL;
+                rko->rko_serve_opaque = NULL;
+        }
+
         res = rd_kafka_op_handle_std(rk, rkq, rko, cb_type);
         if (res == RD_KAFKA_OP_RES_KEEP) {
                 /* Op was handled but must not be destroyed. */
@@ -663,13 +681,6 @@ rd_kafka_op_handle (rd_kafka_t *rk, rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
                 return res;
         } else if (unlikely(res == RD_KAFKA_OP_RES_YIELD))
                 return res;
-
-        if (rko->rko_serve) {
-                callback = rko->rko_serve;
-                opaque   = rko->rko_serve_opaque;
-                rko->rko_serve        = NULL;
-                rko->rko_serve_opaque = NULL;
-        }
 
         if (callback)
                 res = callback(rk, rkq, rko, cb_type, opaque);

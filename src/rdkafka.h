@@ -271,7 +271,7 @@ typedef enum {
 	/** Produced message timed out*/
 	RD_KAFKA_RESP_ERR__MSG_TIMED_OUT = -192,
 	/** Reached the end of the topic+partition queue on
-	 * the broker. Not really an error. 
+	 * the broker. Not really an error.
 	 * This event is disabled by default,
 	 * see the `enable.partition.eof` configuration property. */
 	RD_KAFKA_RESP_ERR__PARTITION_EOF = -191,
@@ -363,8 +363,8 @@ typedef enum {
         RD_KAFKA_RESP_ERR__GAPLESS_GUARANTEE = -148,
         /** Maximum poll interval exceeded */
         RD_KAFKA_RESP_ERR__MAX_POLL_EXCEEDED = -147,
-        /** Can't execute transactional method due to error state */
-        RD_KAFKA_RESP_ERR__TXN_ERR_STATE = -146,
+        /** Unknown broker */
+        RD_KAFKA_RESP_ERR__UNKNOWN_BROKER = -146,
 
 	/** End internal error codes */
 	RD_KAFKA_RESP_ERR__END = -100,
@@ -3685,6 +3685,8 @@ rd_kafka_position (rd_kafka_t *rk,
  *               (RD_KAFKA_RESP_ERR__UNKNOWN_TOPIC)
  *  - ECANCELED - fatal error has been raised on producer, see
  *                rd_kafka_fatal_error().
+ *  - ESTALE   - transactional state forbids producing
+ *               (RD_KAFKA_RESP_ERR__STATE)
  *
  * @sa Use rd_kafka_errno2err() to convert `errno` to rdkafka error code.
  */
@@ -6214,6 +6216,38 @@ RD_EXPORT
 rd_kafka_resp_err_t
 rd_kafka_oauthbearer_set_token_failure (rd_kafka_t *rk, const char *errstr);
 
+/**@}*/
+
+/**
+ * @name Transactional API
+ * @{
+ *
+ */
+
+RD_EXPORT
+rd_kafka_resp_err_t
+rd_kafka_init_transactions (rd_kafka_t *rk,
+                            char *errstr, size_t errstr_size);
+
+RD_EXPORT
+rd_kafka_resp_err_t rd_kafka_begin_transaction (rd_kafka_t *rk,
+                                                char *errstr,
+                                                size_t errstr_size);
+
+RD_EXPORT
+rd_kafka_resp_err_t
+rd_kafka_send_offsets_to_transaction (rd_kafka_t *rk,
+                                      rd_kafka_topic_partition_list_t *offsets,
+                                      const char *consumer_group_id,
+                                      char *errstr, size_t errstr_size);
+
+rd_kafka_resp_err_t
+rd_kafka_commit_transaction (rd_kafka_t *rk,
+                             char *errstr, size_t errstr_size);
+
+rd_kafka_resp_err_t
+rd_kafka_abort_transaction (rd_kafka_t *rk,
+                            char *errstr, size_t errstr_size);
 /**@}*/
 
 /* @cond NO_DOC */

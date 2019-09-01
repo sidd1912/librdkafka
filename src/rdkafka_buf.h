@@ -943,6 +943,13 @@ static RD_INLINE size_t rd_kafka_buf_write_bytes (rd_kafka_buf_t *rkbuf,
 }
 
 
+/**
+ * @brief Write bool to buffer.
+ */
+static RD_INLINE size_t rd_kafka_buf_write_bool (rd_kafka_buf_t *rkbuf,
+                                                 rd_bool_t v) {
+        return rd_kafka_buf_write_i8(rkbuf, (int8_t)v);
+}
 
 
 /**

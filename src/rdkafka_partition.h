@@ -66,6 +66,10 @@ struct rd_kafka_toppar_err {
                                    *   last msg sequence */
 };
 
+
+typedef TAILQ_HEAD(rd_kafka_toppar_tqhead_s, rd_kafka_toppar_s)
+        rd_kafka_toppar_tqhead_t;
+
 /**
  * Topic + Partition combination
  */
@@ -75,6 +79,9 @@ struct rd_kafka_toppar_s { /* rd_kafka_toppar_t */
         CIRCLEQ_ENTRY(rd_kafka_toppar_s) rktp_activelink; /* rkb_active_toppars */
 	TAILQ_ENTRY(rd_kafka_toppar_s) rktp_rktlink; /* rd_kafka_itopic_t link*/
         TAILQ_ENTRY(rd_kafka_toppar_s) rktp_cgrplink;/* rd_kafka_cgrp_t link */
+        TAILQ_ENTRY(rd_kafka_toppar_s)  rktp_txnlink; /**< rd_kafka_t.rk_eos.
+                                                       *   txn_pend_rktps
+                                                       *   or txn_rktps */
         rd_kafka_itopic_t       *rktp_rkt;
         shptr_rd_kafka_itopic_t *rktp_s_rkt;  /* shared pointer for rktp_rkt */
 	int32_t            rktp_partition;
@@ -138,9 +145,9 @@ struct rd_kafka_toppar_s { /* rd_kafka_toppar_t */
                 uint64_t epoch_base_msgid; /**< This Producer epoch's
                                           *   base msgid.
                                           *   When a new epoch is
-                                          *   acquired the base_seq
-                                          *   is set to the current
-                                          *   rktp_msgid so that
+                                          *   acquired, or on transaction abort,
+                                          *   the base_seq is set to the
+                                          *   current rktp_msgid so that
                                           *   sub-sequent produce
                                           *   requests will have
                                           *   a sequence number series
@@ -308,6 +315,10 @@ struct rd_kafka_toppar_s { /* rd_kafka_toppar_t */
                                              * leader might be missing.
                                              * Typically set from
                                              * ProduceResponse failure. */
+#define RD_KAFKA_TOPPAR_F_PEND_TXN   0x100  /* Partition is pending being added
+                                             * to a producer transaction. */
+#define RD_KAFKA_TOPPAR_F_IN_TXN     0x200  /* Partition is part of
+                                             * a producer transaction. */
 
         shptr_rd_kafka_toppar_t *rktp_s_for_desp; /* Shared pointer for
                                                    * rkt_desp list */
@@ -360,7 +371,7 @@ struct rd_kafka_toppar_s { /* rd_kafka_toppar_t */
 
 
 /**
- * Returns a shared pointer for the topic.
+ * Returns a shared pointer for the toppar.
  */
 #define rd_kafka_toppar_keep(rktp)                                      \
         rd_shared_ptr_get(rktp, &(rktp)->rktp_refcnt, shptr_rd_kafka_toppar_t)
@@ -503,6 +514,9 @@ rd_kafka_broker_t *rd_kafka_toppar_leader (rd_kafka_toppar_t *rktp,
 void rd_kafka_toppar_leader_unavailable (rd_kafka_toppar_t *rktp,
                                          const char *reason,
                                          rd_kafka_resp_err_t err);
+
+void rd_kafka_toppar_pause (rd_kafka_toppar_t *rktp, int flag);
+void rd_kafka_toppar_resume (rd_kafka_toppar_t *rktp, int flag);
 
 rd_kafka_resp_err_t
 rd_kafka_toppars_pause_resume (rd_kafka_t *rk,
@@ -711,6 +725,7 @@ int rd_kafka_partition_leader_cmp (const void *_a, const void *_b) {
         return rd_kafka_broker_cmp(a->rkb, b->rkb);
 }
 
+
 int rd_kafka_toppar_pid_change (rd_kafka_toppar_t *rktp, rd_kafka_pid_t pid,
                                 uint64_t base_msgid);
 
@@ -718,5 +733,13 @@ int rd_kafka_toppar_handle_purge_queues (rd_kafka_toppar_t *rktp,
                                          rd_kafka_broker_t *rkb,
                                          int purge_flags);
 void rd_kafka_purge_ua_toppar_queues (rd_kafka_t *rk);
+
+static RD_UNUSED
+int rd_kafka_toppar_topic_cmp (const void *_a, const void *_b) {
+        const rd_kafka_toppar_t *a = _a, *b = _b;
+        return strcmp(a->rktp_rkt->rkt_topic->str,
+                      b->rktp_rkt->rkt_topic->str);
+}
+
 
 #endif /* _RDKAFKA_PARTITION_H_ */

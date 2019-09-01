@@ -481,8 +481,8 @@ void rd_kafka_cgrp_coord_query (rd_kafka_cgrp_t *rkcg,
 	rd_kafka_broker_t *rkb;
 
 	rd_kafka_rdlock(rkcg->rkcg_rk);
-	rkb = rd_kafka_broker_any(rkcg->rkcg_rk, RD_KAFKA_BROKER_STATE_UP,
-				  rd_kafka_broker_filter_can_group_query, NULL,
+        rkb = rd_kafka_broker_any(rkcg->rkcg_rk, RD_KAFKA_BROKER_STATE_UP,
+                                  rd_kafka_broker_filter_can_coord_query, NULL,
                                   "coordinator query");
 	rd_kafka_rdunlock(rkcg->rkcg_rk);
 
@@ -498,11 +498,14 @@ void rd_kafka_cgrp_coord_query (rd_kafka_cgrp_t *rkcg,
                    "Group \"%.*s\": querying for coordinator: %s",
                    RD_KAFKAP_STR_PR(rkcg->rkcg_group_id), reason);
 
-        rd_kafka_FindCoordinatorRequest(rkb, rkcg->rkcg_group_id,
+        /* FIXME: retval */
+        rd_kafka_FindCoordinatorRequest(rkb,
                                         RD_KAFKA_COORD_GROUP,
-                                         RD_KAFKA_REPLYQ(rkcg->rkcg_ops, 0),
-                                         rd_kafka_cgrp_handle_FindCoordinator,
-                                         rkcg);
+                                        rkcg->rkcg_group_id->str,
+                                        NULL, 0,
+                                        RD_KAFKA_REPLYQ(rkcg->rkcg_ops, 0),
+                                        rd_kafka_cgrp_handle_FindCoordinator,
+                                        rkcg);
 
         if (rkcg->rkcg_state == RD_KAFKA_CGRP_STATE_QUERY_COORD)
                 rd_kafka_cgrp_set_state(rkcg, RD_KAFKA_CGRP_STATE_WAIT_COORD);

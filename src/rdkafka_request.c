@@ -186,21 +186,21 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
  * @brief Send FindCoordinatorRequest.
  *
  * @param coordkey is the group.id for RD_KAFKA_COORD_GROUP,
- *                 and the ProducerId for RD_KAFKA_COORD_TXN
- *
+ *                 and the transactional.id for RD_KAFKA_COORD_TXN
  */
-void rd_kafka_FindCoordinatorRequest (rd_kafka_broker_t *rkb,
-                                      rd_kafka_coordtype_t coordtype,
-                                      const rd_kafkap_str_t *coordkey,
-                                      rd_kafka_replyq_t replyq,
-                                      rd_kafka_resp_cb_t *resp_cb,
-                                      void *opaque) {
+rd_kafka_resp_err_t
+rd_kafka_FindCoordinatorRequest (rd_kafka_broker_t *rkb,
+                                 rd_kafka_coordtype_t coordtype,
+                                 const char *coordkey,
+                                 char *errstr, size_t errstr_size,
+                                 rd_kafka_replyq_t replyq,
+                                 rd_kafka_resp_cb_t *resp_cb,
+                                 void *opaque) {
         rd_kafka_buf_t *rkbuf;
-        int16_t ApiVersion = 0;
 
         rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_FindCoordinator, 1,
-                                         1 + RD_KAFKAP_STR_SIZE(coordkey));
-        rd_kafka_buf_write_kstr(rkbuf, coordkey);
+                                         1 + strlen(coordkey));
+        rd_kafka_buf_write_str(rkbuf, coordkey, -1);
 
         if (coordtype != RD_KAFKA_COORD_GROUP) {
                 rd_kafka_buf_write_i8(rkbuf, (int8_t)coordtype);
@@ -210,6 +210,8 @@ void rd_kafka_FindCoordinatorRequest (rd_kafka_broker_t *rkb,
         }
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
+
+        return RD_KAFKA_RESP_ERR_NO_ERROR; // FIXME
 }
 
 
@@ -3419,8 +3421,6 @@ rd_kafka_DescribeConfigsRequest (rd_kafka_broker_t *rkb,
 /**
  * @brief Parses and handles an InitProducerId reply.
  *
- * @returns 0 on success, else an error.
- *
  * @locality rdkafka main thread
  * @locks none
  */
@@ -3506,6 +3506,158 @@ rd_kafka_InitProducerIdRequest (rd_kafka_broker_t *rkb,
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
 
         /* Let the idempotence state handler perform retries */
+        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+
+        rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
+
+        return RD_KAFKA_RESP_ERR_NO_ERROR;
+}
+
+
+/**
+ * @brief Construct and send AddPartitionsToTxnRequest to \p rkb.
+ *
+ *        The response (unparsed) will be handled by \p resp_cb served
+ *        by queue \p replyq.
+ *
+ * @param rktps MUST be sorted by topic name.
+ *
+ *
+ * @returns RD_KAFKA_RESP_ERR_NO_ERROR if the request was enqueued for
+ *          transmission, otherwise an error code.
+ */
+rd_kafka_resp_err_t
+rd_kafka_AddPartitionsToTxnRequest (rd_kafka_broker_t *rkb,
+                                    const char *transactional_id,
+                                    rd_kafka_pid_t pid,
+                                    const rd_kafka_toppar_tqhead_t *rktps,
+                                    char *errstr, size_t errstr_size,
+                                    rd_kafka_replyq_t replyq,
+                                    rd_kafka_resp_cb_t *resp_cb,
+                                    void *opaque) {
+        rd_kafka_buf_t *rkbuf;
+        int16_t ApiVersion = 0;
+        rd_kafka_toppar_t *rktp;
+        rd_kafka_itopic_t *last_rkt = NULL;
+        size_t of_TopicCnt;
+        ssize_t of_PartCnt = -1;
+        int TopicCnt = 0, PartCnt = 0;
+
+        ApiVersion = rd_kafka_broker_ApiVersion_supported(
+                rkb, RD_KAFKAP_AddPartitionsToTxn, 0, 0, NULL);
+        if (ApiVersion == -1) {
+                rd_snprintf(errstr, errstr_size,
+                            "AddPartitionsToTxnRequest (KIP-98) not supported "
+                            "by broker, requires broker version >= 0.11.0");
+                rd_kafka_replyq_destroy(&replyq);
+                return RD_KAFKA_RESP_ERR__UNSUPPORTED_FEATURE;
+        }
+
+        rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_AddPartitionsToTxn, 1,
+                                         500);
+
+        /* transactional_id */
+        rd_kafka_buf_write_str(rkbuf, transactional_id, -1);
+
+        /* PID */
+        rd_kafka_buf_write_i64(rkbuf, pid.id);
+        rd_kafka_buf_write_i16(rkbuf, pid.epoch);
+
+        /* Topics/partitions array (count updated later) */
+        of_TopicCnt = rd_kafka_buf_write_i32(rkbuf, 0);
+
+        TAILQ_FOREACH(rktp, rktps, rktp_txnlink) {
+                if (last_rkt != rktp->rktp_rkt) {
+
+                        if (last_rkt) {
+                                /* Update last topic's partition count field */
+                                rd_kafka_buf_update_i32(rkbuf, of_PartCnt,
+                                                        PartCnt);
+                                of_PartCnt = -1;
+                        }
+
+                        /* Topic name */
+                        rd_kafka_buf_write_kstr(rkbuf,
+                                                rktp->rktp_rkt->rkt_topic);
+                        /* Partition count, updated later */
+                        of_PartCnt = rd_kafka_buf_write_i32(rkbuf, 0);
+
+                        PartCnt = 0;
+                        TopicCnt++;
+                        last_rkt = rktp->rktp_rkt;
+                }
+
+                /* Partition id */
+                rd_kafka_buf_write_i32(rkbuf, rktp->rktp_partition);
+                PartCnt++;
+        }
+
+        /* Update last partition and topic count fields */
+        if (of_PartCnt != -1)
+                rd_kafka_buf_update_i32(rkbuf, (size_t)of_PartCnt, PartCnt);
+        rd_kafka_buf_update_i32(rkbuf, of_TopicCnt, TopicCnt);
+
+        rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
+
+        /* Let the handler perform retries so that it can pick
+         * up more added partitions. */
+        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+
+        rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
+
+        return RD_KAFKA_RESP_ERR_NO_ERROR;
+}
+
+
+
+/**
+ * @brief Construct and send EndTxnRequest to \p rkb.
+ *
+ *        The response (unparsed) will be handled by \p resp_cb served
+ *        by queue \p replyq.
+ *
+ * @returns RD_KAFKA_RESP_ERR_NO_ERROR if the request was enqueued for
+ *          transmission, otherwise an error code.
+ */
+rd_kafka_resp_err_t
+rd_kafka_EndTxnRequest (rd_kafka_broker_t *rkb,
+                        const char *transactional_id,
+                        rd_kafka_pid_t pid,
+                        rd_bool_t committed,
+                        char *errstr, size_t errstr_size,
+                        rd_kafka_replyq_t replyq,
+                        rd_kafka_resp_cb_t *resp_cb,
+                        void *opaque) {
+        rd_kafka_buf_t *rkbuf;
+        int16_t ApiVersion = 0;
+
+        ApiVersion = rd_kafka_broker_ApiVersion_supported(
+                rkb, RD_KAFKAP_EndTxn, 0, 1, NULL);
+        if (ApiVersion == -1) {
+                rd_snprintf(errstr, errstr_size,
+                            "EndTxnRequest (KIP-98) not supported "
+                            "by broker, requires broker version >= 0.11.0");
+                rd_kafka_replyq_destroy(&replyq);
+                return RD_KAFKA_RESP_ERR__UNSUPPORTED_FEATURE;
+        }
+
+        rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_EndTxn, 1,
+                                         500);
+
+        /* transactional_id */
+        rd_kafka_buf_write_str(rkbuf, transactional_id, -1);
+
+        /* PID */
+        rd_kafka_buf_write_i64(rkbuf, pid.id);
+        rd_kafka_buf_write_i16(rkbuf, pid.epoch);
+
+        /* Committed */
+        rd_kafka_buf_write_bool(rkbuf, committed);
+
+
+        rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
+
+        /* Let the handler perform retries */
         rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
