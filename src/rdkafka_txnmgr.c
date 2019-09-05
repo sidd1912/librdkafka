@@ -604,16 +604,21 @@ rd_kafka_txn_op_init_transactions (rd_kafka_t *rk,
                 goto err;
         }
 
+        rd_kafka_wrlock(rk);
+
         if (rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_INIT) {
                 rd_snprintf(errstr, sizeof(errstr),
                             "Unable to initialize transactions in state %s: "
                             "already initialized",
                             rd_kafka_txn_state2str(rk->rk_eos.txn_state));
+                rd_kafka_wrunlock(rk);
                 err = RD_KAFKA_RESP_ERR__STATE;
                 goto err;
         }
 
         rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_WAIT_PID);
+
+        rd_kafka_wrunlock(rk);
 
         rd_kafka_idemp_start(rk, rd_true/*immediately*/);
 
@@ -800,34 +805,198 @@ rd_kafka_resp_err_t rd_kafka_begin_transaction (rd_kafka_t *rk,
  *         other unexpected error
  */
 
-rd_kafka_resp_err_t
-rd_kafka_send_offsets_to_transaction (rd_kafka_t *rk,
-                                      rd_kafka_topic_partition_list_t *offsets,
-                                      const char *consumer_group_id,
-                                      char *errstr, size_t errstr_size) {
-        rd_kafka_resp_err_t err;
 
-        return RD_KAFKA_RESP_ERR__NOT_IMPLEMENTED;
+/**
+ * @brief Handle AddOffsetsToTxnResponse
+ *
+ * @locality rdkafka main thread
+ * @locks none
+ */
+static void rd_kafka_txn_handle_AddOffsetsToTxn (rd_kafka_t *rk,
+                                                 rd_kafka_broker_t *rkb,
+                                                 rd_kafka_resp_err_t err,
+                                                 rd_kafka_buf_t *rkbuf,
+                                                 rd_kafka_buf_t *request,
+                                                 void *opaque) {
+        const int log_decode_errors = LOG_ERR;
+        rd_kafka_op_t *rko = opaque;
+        int16_t ErrorCode;
+        int actions = 0;
+
+        if (err)
+                goto done;
+
+        rd_kafka_buf_read_throttle_time(rkbuf);
+        rd_kafka_buf_read_i16(rkbuf, &ErrorCode);
+
+        err = ErrorCode;
+        goto done;
+
+ err_parse:
+        err = rkbuf->rkbuf_err;
+
+ done:
+        if (err)
+                rk->rk_eos.txn_req_cnt--;
+
+        rd_rkb_dbg(rkb, EOS, "ADDOFFSETS", "err %s, actions 0x%x",
+                   rd_kafka_err2name(err), actions);
+
+        if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
+                rd_kafka_set_fatal_error(rk, err,
+                                         "Failed to add offsets to "
+                                         "transaction: %s",
+                                         rd_kafka_err2str(err));
+                rd_kafka_wrlock(rk);
+                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
+                rd_kafka_wrunlock(rk);
+
+        } else if (actions & RD_KAFKA_ERR_ACTION_REFRESH) {
+                /* Requery for coordinator? */
+                /* FIXME */
+                // rd_kafka_buf_retry_on_coordinator(rk, _GROUP, group_id, req);
+        } else if (actions & RD_KAFKA_ERR_ACTION_RETRY) {
+                rd_kafka_buf_retry(rk->rk_eos.txn_coord, request);
+
+        } else if (!err) {
+                /* Step 2: look up group coordinator.
+                 *         we'll cache the last used one. */
+
+                rd_kafka_buf_enq_on_coord(rk, RD_KAFKA_COORD_GROUP,
+                                          rd_kafka_TxnOffsetCommitRequest_op,
+                                          rko,
+                                          RD_KAFKA_REPLYQ(rk->rk_ops, 0),
+                                          rko);
+
+                rd_kafka_topic_partition_list_sort_by_topic(
+                        rko->rko_u.txn.offsets);
+
+                if (rk->rk_eos.txn_last_group_id &&
+                    !strcmp(rk->rk_eos.txn_last_group_id,
+                            rko->rko_u.txn.group_id)) {
+                        /* Use cached group coordinator. */
+
+
+                        err = rd_kafka_TxnOffsetCommitRequest(
+                                rk->rk_eos.txn_last_group_coord,
+                                rk->rk_conf.eos.transactional_id,
+                                pid,
+                                rko->rko_u.txn.offsets,
+                                errstr, sizeof(errstr),
+                                RD_KAFKA_REPLYQ(rk->rk_ops, 0),
+                                rd_kafka_txn_handle_AddOffsetsToTxn,
+                                rko);
+
+                        rd_assert(!err); // FIXME
+                }
+        }
+}
+
+
+/**
+ * @brief Async handler for send_offsets_to_transaction()
+ *
+ * @locks none
+ * @locality rdkafka main thread
+ */
+static rd_kafka_op_res_t
+rd_kafka_txn_op_send_offsets_to_transaction (rd_kafka_t *rk,
+                                             rd_kafka_q_t *rkq,
+                                             rd_kafka_op_t *rko) {
+        rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR_NO_ERROR;
+        char errstr[512];
+
+        rd_kafka_op_clear_cb(rko);
 
         rd_kafka_wrlock(rk);
-        if (rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_IN_TRANSACTION) {
-                rd_snprintf(errstr, errstr_size,
-                            "Can't send offsets to transaction because "
-                            "producer is not in state IN_TRANSACTION "
-                            "but %s",
-                            rd_kafka_txn_state2str(rk->rk_eos.txn_state));
-                rd_kafka_wrunlock(rk);
-                return RD_KAFKA_RESP_ERR__STATE;
-        }
 
-        rd_kafka_dbg(rk, EOS, "TXNOFFSETS",
-                     "Begin adding %d offset(s) for consumer group %s "
-                     "to transaction",
-                     offsets->cnt, consumer_group_id);
+        if ((err = rd_kafka_txn_require_state(
+                     rk, RD_KAFKA_TXN_STATE_IN_TRANSACTION))) {
+                rd_kafka_wrunlock(rk);
+                goto err;
+        }
 
         rd_kafka_wrunlock(rk);
 
-        /* FIXME: Send AddOffsetsToTxnRequest */
+        pid = rd_kafka_idemp_get_pid0(rk, rd_false/*dont-lock*/);
+        if (!rd_kafka_pid_valid(pid)) {
+                rd_dassert(!*"BUG: No PID despite proper transaction state");
+                err = RD_KAFKA_RESP_ERR__STATE;
+                rd_snprintf(errstr, sizeof(errstr),
+                            "No PID available (idempotence state %s)",
+                            rd_kafka_idemp_state2str(rk->rk_eos.idemp_state));
+                goto err;
+        }
+
+
+        err = rd_kafka_EndTxnRequest(rk->rk_eos.txn_coord,
+                                     rk->rk_conf.eos.transactional_id,
+                                     pid,
+                                     rd_true /* commit */,
+                                     errstr, sizeof(errstr),
+                                     RD_KAFKA_REPLYQ(rk->rk_ops, 0),
+                                     rd_kafka_txn_handle_EndTxn, NULL);
+        if (err)
+                goto err;
+
+        /* This is a multi-stage operation, consisting of:
+         *  1) send AddOffsetsToTxnRequest to transaction coordinator.
+         *  2) look up group coordinator for the provided group.
+         *  3) send TxnOffsetCommitRequest to group coordinator. */
+
+        rd_kafka_AddOffsetsToTxnRequest(rk->rk_eos.txn_coord,
+                                        rk->rk_conf.eos.transactional_id,
+                                        pid,
+                                        rko->rko_u.txn.group_id,
+                                        errstr, sizeof(errstr),
+                                        RD_KAFKA_REPLYQ(rk->rk_ops, 0),
+                                        rd_kafka_txn_handle_AddOffsetsToTxn,
+                                        rko);
+
+        return RD_KAFKA_OP_RES_KEEP; /* input rko is used for reply */
+
+ err:
+        rko->rko_err = err;
+        rko->rko_u.txn.errstr = rd_strdup(errstr);
+
+        rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
+
+        return RD_KAFKA_OP_RES_KEEP; /* input rko was used for reply */
+}
+
+rd_kafka_resp_err_t
+rd_kafka_send_offsets_to_transaction (
+        rd_kafka_t *rk,
+        const rd_kafka_topic_partition_list_t *offsets,
+        const char *consumer_group_id,
+        char *errstr, size_t errstr_size) {
+        rd_kafka_op_t *rko;
+        rd_kafka_op_t *reply;
+        rd_kafka_resp_err_t err;
+
+        if ((err = rd_kafka_ensure_transactional(rk, errstr, errstr_size)))
+                return err;
+
+        if (!consumer_group_id || !*consumer_group_id ||
+            !offsets || offsets->cnt == 0) {
+                rd_snprintf(errstr, errstr_size,
+                            "consumer_group_id and offsets "
+                            "are required parameters");
+                return RD_KAFKA_RESP_ERR__INVALID_ARG;
+        }
+
+        rko = rd_kafka_op_new_cb(rk, RD_KAFKA_OP_TXN,
+                                 rd_kafka_txn_op_send_offsets_to_transaction);
+        rko->rko_u.txn.offsets = rd_kafka_topic_partition_list_copy(offsets);
+        rko->rko_u.txn.group_id = rd_strdup(consumer_group_id);
+
+        reply = rd_kafka_op_req(rk->rk_ops, rko, RD_POLL_INFINITE);
+
+        if ((err = reply->rko_err))
+                rd_snprintf(errstr, errstr_size, "%s",
+                            reply->rko_u.txn.errstr);
+
+        rd_kafka_op_destroy(reply);
 
         return err;
 }

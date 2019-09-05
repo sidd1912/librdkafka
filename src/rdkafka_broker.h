@@ -453,8 +453,9 @@ void rd_kafka_broker_destroy_final (rd_kafka_broker_t *rkb);
                                  rd_kafka_broker_destroy_final(rkb))
 
 
-void rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
-                             const struct rd_kafka_metadata_broker *mdb);
+rd_kafka_broker_t *
+rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
+                        const struct rd_kafka_metadata_broker *mdb);
 rd_kafka_broker_t *rd_kafka_broker_add (rd_kafka_t *rk,
 					rd_kafka_confsource_t source,
 					rd_kafka_secproto_t proto,

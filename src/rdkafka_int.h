@@ -368,13 +368,22 @@ struct rd_kafka_s {
                                                  *   currently being handled,
                                                  *   e.g init_transactions() */
 
-                int txn_addparts_req_cnt;       /**< Number of
-                                                 *   AddPartitionsToRequests
-                                                 *   sent for the current
-                                                 *   transaction. */
+                int txn_req_cnt;                /**< Number of transaction
+                                                 *   requests sent.
+                                                 *   This is set when a
+                                                 *   AddPartitionsToTxn or
+                                                 *   AddOffsetsToTxn request
+                                                 *   has been sent for the
+                                                 *   current transaction,
+                                                 *   to keep track of
+                                                 *   whether the broker is
+                                                 *   aware of the current
+                                                 *   transaction and thus
+                                                 *   requires an EndTxn request
+                                                 *   on abort or not. */
 
                 /**< Timer to trigger registration of pending partitions */
-                rd_kafka_timer_t txn_register_parts_tmr;
+                rd_kafka_timer_t         txn_register_parts_tmr;
 
                 /**< Lock for txn_pending_rktps and txn_waitresp_rktps */
                 mtx_t                    txn_pending_lock;
@@ -387,6 +396,10 @@ struct rd_kafka_s {
 
                 /**< Partitions added and registered to transaction. */
                 rd_kafka_toppar_tqhead_t txn_rktps;
+
+                /**< Cache the last used consumer group coordinator. */
+                char              *txn_last_group_id;
+                rd_kafka_broker_t *txn_last_group_coord;
         } rk_eos;
 
 	const rd_kafkap_bytes_t *rk_null_bytes;

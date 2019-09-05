@@ -432,9 +432,12 @@ struct rd_kafka_op_s {
                 } broker_monitor;
 
                 struct {
-                        char *errstr;  /**< Error string, if rko_err is set. */
+                        char *errstr;   /**< Error string, if rko_err is set */
+                        char *group_id; /**< Consumer group id for commits */
+                        /**< Offsets to commit */
+                        rd_kafka_topic_partition_list_t *offsets;
                 } txn;
-	} rko_u;
+        } rko_u;
 };
 
 TAILQ_HEAD(rd_kafka_op_head_s, rd_kafka_op_s);

@@ -402,12 +402,15 @@ typedef enum {
 	RD_KAFKA_RESP_ERR_NETWORK_EXCEPTION = 13,
 	/** Coordinator load in progress */
         RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS = 14,
+        /** Group load in progress */
 #define RD_KAFKA_RESP_ERR_GROUP_LOAD_IN_PROGRESS  RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS
 	 /** Coordinator not available */
         RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE = 15,
+        /** Group coordinator not available */
 #define RD_KAFKA_RESP_ERR_GROUP_COORDINATOR_NOT_AVAILABLE RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE
 	/** Not coordinator */
         RD_KAFKA_RESP_ERR_NOT_COORDINATOR = 16,
+        /** Not coordinator for group */
 #define RD_KAFKA_RESP_ERR_NOT_COORDINATOR_FOR_GROUP RD_KAFKA_RESP_ERR_NOT_COORDINATOR
 	/** Invalid topic */
         RD_KAFKA_RESP_ERR_TOPIC_EXCEPTION = 17,
@@ -3685,7 +3688,7 @@ rd_kafka_position (rd_kafka_t *rk,
  *               (RD_KAFKA_RESP_ERR__UNKNOWN_TOPIC)
  *  - ECANCELED - fatal error has been raised on producer, see
  *                rd_kafka_fatal_error().
- *  - ESTALE   - transactional state forbids producing
+ *  - ENOEXEC  - transactional state forbids producing
  *               (RD_KAFKA_RESP_ERR__STATE)
  *
  * @sa Use rd_kafka_errno2err() to convert `errno` to rdkafka error code.
@@ -6236,10 +6239,11 @@ rd_kafka_resp_err_t rd_kafka_begin_transaction (rd_kafka_t *rk,
 
 RD_EXPORT
 rd_kafka_resp_err_t
-rd_kafka_send_offsets_to_transaction (rd_kafka_t *rk,
-                                      rd_kafka_topic_partition_list_t *offsets,
-                                      const char *consumer_group_id,
-                                      char *errstr, size_t errstr_size);
+rd_kafka_send_offsets_to_transaction (
+        rd_kafka_t *rk,
+        const rd_kafka_topic_partition_list_t *offsets,
+        const char *consumer_group_id,
+        char *errstr, size_t errstr_size);
 
 rd_kafka_resp_err_t
 rd_kafka_commit_transaction (rd_kafka_t *rk,

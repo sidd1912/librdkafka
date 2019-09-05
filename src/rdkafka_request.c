@@ -198,6 +198,8 @@ rd_kafka_FindCoordinatorRequest (rd_kafka_broker_t *rkb,
                                  void *opaque) {
         rd_kafka_buf_t *rkbuf;
 
+        // FIXME: look up available apiversion
+
         rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_FindCoordinator, 1,
                                          1 + strlen(coordkey));
         rd_kafka_buf_write_str(rkbuf, coordkey, -1);
@@ -3535,6 +3537,99 @@ rd_kafka_AddPartitionsToTxnRequest (rd_kafka_broker_t *rkb,
                                     rd_kafka_replyq_t replyq,
                                     rd_kafka_resp_cb_t *resp_cb,
                                     void *opaque) {
+        rd_kafka_buf_t *rkbuf;
+        int16_t ApiVersion = 0;
+        rd_kafka_toppar_t *rktp;
+        rd_kafka_itopic_t *last_rkt = NULL;
+        size_t of_TopicCnt;
+        ssize_t of_PartCnt = -1;
+        int TopicCnt = 0, PartCnt = 0;
+
+        ApiVersion = rd_kafka_broker_ApiVersion_supported(
+                rkb, RD_KAFKAP_AddPartitionsToTxn, 0, 0, NULL);
+        if (ApiVersion == -1) {
+                rd_snprintf(errstr, errstr_size,
+                            "AddPartitionsToTxnRequest (KIP-98) not supported "
+                            "by broker, requires broker version >= 0.11.0");
+                rd_kafka_replyq_destroy(&replyq);
+                return RD_KAFKA_RESP_ERR__UNSUPPORTED_FEATURE;
+        }
+
+        rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_AddPartitionsToTxn, 1,
+                                         500);
+
+        /* transactional_id */
+        rd_kafka_buf_write_str(rkbuf, transactional_id, -1);
+
+        /* PID */
+        rd_kafka_buf_write_i64(rkbuf, pid.id);
+        rd_kafka_buf_write_i16(rkbuf, pid.epoch);
+
+        /* Topics/partitions array (count updated later) */
+        of_TopicCnt = rd_kafka_buf_write_i32(rkbuf, 0);
+
+        TAILQ_FOREACH(rktp, rktps, rktp_txnlink) {
+                if (last_rkt != rktp->rktp_rkt) {
+
+                        if (last_rkt) {
+                                /* Update last topic's partition count field */
+                                rd_kafka_buf_update_i32(rkbuf, of_PartCnt,
+                                                        PartCnt);
+                                of_PartCnt = -1;
+                        }
+
+                        /* Topic name */
+                        rd_kafka_buf_write_kstr(rkbuf,
+                                                rktp->rktp_rkt->rkt_topic);
+                        /* Partition count, updated later */
+                        of_PartCnt = rd_kafka_buf_write_i32(rkbuf, 0);
+
+                        PartCnt = 0;
+                        TopicCnt++;
+                        last_rkt = rktp->rktp_rkt;
+                }
+
+                /* Partition id */
+                rd_kafka_buf_write_i32(rkbuf, rktp->rktp_partition);
+                PartCnt++;
+        }
+
+        /* Update last partition and topic count fields */
+        if (of_PartCnt != -1)
+                rd_kafka_buf_update_i32(rkbuf, (size_t)of_PartCnt, PartCnt);
+        rd_kafka_buf_update_i32(rkbuf, of_TopicCnt, TopicCnt);
+
+        rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
+
+        /* Let the handler perform retries so that it can pick
+         * up more added partitions. */
+        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+
+        rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
+
+        return RD_KAFKA_RESP_ERR_NO_ERROR;
+}
+
+
+/**
+ * @brief Construct and send AddOffsetsToTxnRequest to \p rkb.
+ *
+ *        The response (unparsed) will be handled by \p resp_cb served
+ *        by queue \p replyq.
+ *
+ * @returns RD_KAFKA_RESP_ERR_NO_ERROR if the request was enqueued for
+ *          transmission, otherwise an error code.
+ */
+rd_kafka_resp_err_t
+rd_kafka_AddOffsetsToTxnRequest (rd_kafka_broker_t *rkb,
+                                 const char *transactional_id,
+                                 rd_kafka_pid_t pid,
+                                 const char *group_id,
+                                 const rd_kafka_toppar_tqhead_t *rktps,
+                                 char *errstr, size_t errstr_size,
+                                 rd_kafka_replyq_t replyq,
+                                 rd_kafka_resp_cb_t *resp_cb,
+                                 void *opaque) {
         rd_kafka_buf_t *rkbuf;
         int16_t ApiVersion = 0;
         rd_kafka_toppar_t *rktp;

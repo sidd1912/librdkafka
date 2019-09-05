@@ -5279,11 +5279,16 @@ int rd_kafka_brokers_add (rd_kafka_t *rk, const char *brokerlist) {
 
 
 /**
- * Adds a new broker or updates an existing one.
+ * @brief Adds a new broker or updates an existing one.
  *
+ * @returns the broker object with refcount increased, or NULL on error.
+ *
+ * @locks none
+ * @locality any
  */
-void rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
-                             const struct rd_kafka_metadata_broker *mdb) {
+rd_kafka_broker_t *
+rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
+                        const struct rd_kafka_metadata_broker *mdb) {
 	rd_kafka_broker_t *rkb;
         char nodename[RD_KAFKA_NODENAME_SIZE];
         int needs_update = 0;
@@ -5327,8 +5332,9 @@ void rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
                         rko->rko_u.node.nodeid   = mdb->id;
                         rd_kafka_q_enq(rkb->rkb_ops, rko);
                 }
-                rd_kafka_broker_destroy(rkb);
         }
+
+        return rkb;
 }
 
 
