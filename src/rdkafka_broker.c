@@ -4603,6 +4603,8 @@ static int rd_kafka_broker_thread_main (void *arg) {
                 }
 	}
 
+        rd_kafka_broker_monitor_del(&rkb->rkb_coord_monitor);
+
 	if (rkb->rkb_source != RD_KAFKA_INTERNAL) {
 		rd_kafka_wrlock(rkb->rkb_rk);
 		TAILQ_REMOVE(&rkb->rkb_rk->rk_brokers, rkb, rkb_link);
@@ -4896,6 +4898,13 @@ rd_kafka_broker_t *rd_kafka_broker_add (rd_kafka_t *rk,
 	}
 
 	rd_kafka_broker_unlock(rkb);
+
+        /* Add broker state monitor for the (txn) coordinator request to use */
+        if (rd_kafka_is_transactional(rk))
+                rd_kafka_broker_monitor_add(&rkb->rkb_coord_monitor, rkb,
+                                            rk->rk_ops,
+                                            rd_kafka_coord_rkb_monitor_cb);
+
 
 #ifndef _MSC_VER
 	/* Restore sigmask of caller */
@@ -5300,7 +5309,7 @@ rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
 		/* Dont update metadata while terminating, do this
 		 * after acquiring lock for proper synchronisation */
 		rd_kafka_wrunlock(rk);
-		return;
+                return NULL;
 	}
 
 	if ((rkb = rd_kafka_broker_find_by_nodeid(rk, mdb->id))) {
@@ -5748,12 +5757,13 @@ static void rd_kafka_broker_trigger_monitors (rd_kafka_broker_t *rkb) {
  *
  * The callback will be triggered on the caller's op queue handler thread.
  *
- * Use rd_kafka_broker_get_state() in your callback to get the current
+ * Use rd_kafka_broker_is_up() in your callback to get the current
  * state of the broker, since it might have changed since the event
  * was enqueued.
  *
- * @param rkq queue for event op.
  * @param rkbmon monitoree's monitor.
+ * @param rkb broker to monitor.
+ * @param rkq queue for event op.
  * @param callback callback to be triggered from \p rkq's op handler.
  * @opaque opaque passed to callback.
  *

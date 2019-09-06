@@ -844,6 +844,7 @@ void rd_kafka_destroy_final (rd_kafka_t *rk) {
 
         rd_kafka_assignors_term(rk);
 
+        rd_kafka_coord_cache_destroy(&rk->rk_coord_cache);
         rd_kafka_metadata_cache_destroy(rk);
 
         /* Terminate SASL provider */
@@ -1997,6 +1998,11 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
 	TAILQ_INIT(&rk->rk_topics);
         rd_kafka_timers_init(&rk->rk_timers, rk);
         rd_kafka_metadata_cache_init(rk);
+        rd_kafka_coord_cache_init(&rk->rk_coord_cache,
+                                  rk->rk_conf.metadata_refresh_interval_ms ?
+                                  rk->rk_conf.metadata_refresh_interval_ms :
+                                  (5 * 60 * 1000) /* 5min */);
+        rd_kafka_coord_reqs_init(rk);
 
 	if (rk->rk_conf.dr_cb || rk->rk_conf.dr_msg_cb)
 		rk->rk_conf.enabled_events |= RD_KAFKA_EVENT_DR;

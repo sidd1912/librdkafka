@@ -1,7 +1,7 @@
 /*
  * librdkafka - Apache Kafka C library
  *
- * Copyright (c) 2018 Magnus Edenhill
+ * Copyright (c) 2019 Magnus Edenhill
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -332,8 +332,11 @@ static void rd_kafka_txn_handle_AddPartitionsToTxn (rd_kafka_t *rk,
                                 rd_kafka_txn_partition_registered(rktp);
                                 break;
 
-                        case RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE:
                         case RD_KAFKA_RESP_ERR_NOT_COORDINATOR:
+                                rd_kafka_coord_cache_evict(&rk->rk_coord_cache,
+                                                           rkb);
+                                /* FALLTHRU */
+                        case RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE:
                                 actions |= RD_KAFKA_ERR_ACTION_REFRESH;
                                 break;
 
@@ -387,7 +390,7 @@ static void rd_kafka_txn_handle_AddPartitionsToTxn (rd_kafka_t *rk,
 
  done:
         if (err)
-                rk->rk_eos.txn_addparts_req_cnt--;
+                rk->rk_eos.txn_req_cnt--;
 
         mtx_lock(&rk->rk_eos.txn_pending_lock);
         TAILQ_CONCAT(&rk->rk_eos.txn_pending_rktps,
@@ -491,7 +494,7 @@ static rd_kafka_resp_err_t rd_kafka_txn_register_partitions (rd_kafka_t *rk) {
 
         mtx_unlock(&rk->rk_eos.txn_pending_lock);
 
-        rk->rk_eos.txn_addparts_req_cnt++;
+        rk->rk_eos.txn_req_cnt++;
 
         rd_rkb_dbg(rk->rk_eos.txn_coord, EOS, "ADDPARTS",
                    "Adding partitions to transaction");
@@ -723,7 +726,7 @@ rd_kafka_txn_op_begin_transaction (rd_kafka_t *rk,
 
                 rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_IN_TRANSACTION);
 
-                rk->rk_eos.txn_addparts_req_cnt = 0;
+                rk->rk_eos.txn_req_cnt = 0;
 
                 /* Wake up all broker threads (that may have messages to send
                  * that were waiting for this transaction state.
@@ -807,6 +810,128 @@ rd_kafka_resp_err_t rd_kafka_begin_transaction (rd_kafka_t *rk,
 
 
 /**
+ * @brief Handle TxnOffsetCommitResponse
+ *
+ * @locality rdkafka main thread
+ * @locks none
+ */
+static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
+                                                 rd_kafka_broker_t *rkb,
+                                                 rd_kafka_resp_err_t err,
+                                                 rd_kafka_buf_t *rkbuf,
+                                                 rd_kafka_buf_t *request,
+                                                 void *opaque) {
+        const int log_decode_errors = LOG_ERR;
+        rd_kafka_op_t *rko = opaque;
+        int actions = 0;
+        rd_kafka_topic_partition_list_t *partitions = NULL;
+
+        if (err)
+                goto done;
+
+        rd_kafka_buf_read_throttle_time(rkbuf);
+
+        partitions = rd_kafka_buf_read_topic_partitions(
+                rkbuf, rko->rko_u.txn.offsets->cnt);
+        if (!partitions)
+                goto err_parse;
+
+        /* FIXME, handle partitions */
+        err = rd_kafka_topic_partition_list_get_err(partitions);
+
+        goto done;
+
+ err_parse:
+        err = rkbuf->rkbuf_err;
+
+ done:
+        if (err)
+                rk->rk_eos.txn_req_cnt--;
+
+        rd_rkb_dbg(rkb, EOS, "TXNOFFSETS", "err %s, actions 0x%x",
+                   rd_kafka_err2name(err), actions);
+
+        if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
+                rd_kafka_set_fatal_error(rk, err,
+                                         "Failed to commit offsets to "
+                                         "transaction: %s",
+                                         rd_kafka_err2str(err));
+                rd_kafka_wrlock(rk);
+                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
+                rd_kafka_wrunlock(rk);
+
+        } else if (actions & RD_KAFKA_ERR_ACTION_REFRESH) {
+                /* Requery for coordinator? */
+                /* FIXME */
+                // rd_kafka_buf_retry_on_coordinator(rk, _GROUP, group_id, req);
+        } else if (actions & RD_KAFKA_ERR_ACTION_RETRY) {
+                rd_kafka_buf_retry(rkb, request);
+                return;
+        }
+
+
+        rko->rko_err = err;
+        // FIXME rko->rko_u.txn.errstr = rd_strdup(errstr);
+        rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
+}
+
+
+
+/**
+ * @brief Construct and send TxnOffsetCommitRequest.
+ *        Triggered (asynchronously) by coord_req().
+ *
+ * @locality rdkafka main thread
+ * @locks none
+ */
+static rd_kafka_resp_err_t
+rd_kafka_TxnOffsetCommitRequest_op (rd_kafka_broker_t *rkb,
+                                    rd_kafka_op_t *rko,
+                                    rd_kafka_replyq_t replyq,
+                                    rd_kafka_resp_cb_t *resp_cb,
+                                    void *reply_opaque) {
+        rd_kafka_t *rk = rkb->rkb_rk;
+        rd_kafka_buf_t *rkbuf;
+        int16_t ApiVersion;
+        rd_kafka_topic_partition_list_t *offsets = rko->rko_u.txn.offsets;
+        rd_kafka_pid_t pid;
+
+        pid = rd_kafka_idemp_get_pid0(rk, RD_DO_LOCK);
+        if (!rd_kafka_pid_valid(pid))
+                return RD_KAFKA_RESP_ERR__STATE; // FIXME> replyq destroy?
+
+        ApiVersion = rd_kafka_broker_ApiVersion_supported(
+                rkb, RD_KAFKAP_TxnOffsetCommit, 0, 0, NULL);
+        if (ApiVersion == -1) // FIXME: destroy replyq?
+                return RD_KAFKA_RESP_ERR__UNSUPPORTED_FEATURE;
+
+        rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_TxnOffsetCommit, 1,
+                                         offsets->cnt * 50);
+
+        /* transactional_id */
+        rd_kafka_buf_write_str(rkbuf, rk->rk_conf.eos.transactional_id, -1);
+
+        /* PID */
+        rd_kafka_buf_write_i64(rkbuf, pid.id);
+        rd_kafka_buf_write_i16(rkbuf, pid.epoch);
+
+        /* Write per-partition offsets list */
+        rd_kafka_buf_write_topic_partitions(rkbuf,
+                                            rko->rko_u.txn.offsets,
+                                            rd_true/*write Metadata*/);
+
+        rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
+
+        /* Let the handler perform retries so we know what is going on */
+        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+
+        rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb,
+                                       reply_opaque);
+
+        return RD_KAFKA_RESP_ERR_NO_ERROR;
+}
+
+/**
  * @brief Handle AddOffsetsToTxnResponse
  *
  * @locality rdkafka main thread
@@ -859,36 +984,21 @@ static void rd_kafka_txn_handle_AddOffsetsToTxn (rd_kafka_t *rk,
                 rd_kafka_buf_retry(rk->rk_eos.txn_coord, request);
 
         } else if (!err) {
-                /* Step 2: look up group coordinator.
-                 *         we'll cache the last used one. */
-
-                rd_kafka_buf_enq_on_coord(rk, RD_KAFKA_COORD_GROUP,
-                                          rd_kafka_TxnOffsetCommitRequest_op,
-                                          rko,
-                                          RD_KAFKA_REPLYQ(rk->rk_ops, 0),
-                                          rko);
-
-                rd_kafka_topic_partition_list_sort_by_topic(
-                        rko->rko_u.txn.offsets);
-
-                if (rk->rk_eos.txn_last_group_id &&
-                    !strcmp(rk->rk_eos.txn_last_group_id,
-                            rko->rko_u.txn.group_id)) {
-                        /* Use cached group coordinator. */
-
-
-                        err = rd_kafka_TxnOffsetCommitRequest(
-                                rk->rk_eos.txn_last_group_coord,
-                                rk->rk_conf.eos.transactional_id,
-                                pid,
-                                rko->rko_u.txn.offsets,
-                                errstr, sizeof(errstr),
-                                RD_KAFKA_REPLYQ(rk->rk_ops, 0),
-                                rd_kafka_txn_handle_AddOffsetsToTxn,
-                                rko);
-
-                        rd_assert(!err); // FIXME
-                }
+                /* Step 3: Commit offsets to transaction on the
+                 *         group coordinator. */
+                rd_kafka_coord_req(rk,
+                                   RD_KAFKA_COORD_GROUP,
+                                   rko->rko_u.txn.group_id,
+                                   rd_kafka_TxnOffsetCommitRequest_op,
+                                   rko,
+                                   60 * 1000 /*FIXME*/,
+                                   RD_KAFKA_REPLYQ(rk->rk_ops, 0),
+                                   rd_kafka_txn_handle_TxnOffsetCommit,
+                                   rko);
+        } else {
+                rko->rko_err = err;
+                // FIXME rko->rko_u.txn.errstr = rd_strdup(errstr);
+                rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
         }
 }
 
@@ -905,13 +1015,15 @@ rd_kafka_txn_op_send_offsets_to_transaction (rd_kafka_t *rk,
                                              rd_kafka_op_t *rko) {
         rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR_NO_ERROR;
         char errstr[512];
+        rd_kafka_pid_t pid;
 
         rd_kafka_op_clear_cb(rko);
 
         rd_kafka_wrlock(rk);
 
         if ((err = rd_kafka_txn_require_state(
-                     rk, RD_KAFKA_TXN_STATE_IN_TRANSACTION))) {
+                     rk, RD_KAFKA_TXN_STATE_IN_TRANSACTION,
+                     errstr, sizeof(errstr)))) {
                 rd_kafka_wrunlock(rk);
                 goto err;
         }
@@ -928,16 +1040,6 @@ rd_kafka_txn_op_send_offsets_to_transaction (rd_kafka_t *rk,
                 goto err;
         }
 
-
-        err = rd_kafka_EndTxnRequest(rk->rk_eos.txn_coord,
-                                     rk->rk_conf.eos.transactional_id,
-                                     pid,
-                                     rd_true /* commit */,
-                                     errstr, sizeof(errstr),
-                                     RD_KAFKA_REPLYQ(rk->rk_ops, 0),
-                                     rd_kafka_txn_handle_EndTxn, NULL);
-        if (err)
-                goto err;
 
         /* This is a multi-stage operation, consisting of:
          *  1) send AddOffsetsToTxnRequest to transaction coordinator.
@@ -1367,7 +1469,7 @@ rd_kafka_txn_op_abort_transaction (rd_kafka_t *rk,
                 goto err;
         }
 
-        if (!rk->rk_eos.txn_addparts_req_cnt) {
+        if (!rk->rk_eos.txn_req_cnt) {
                 rd_kafka_dbg(rk, EOS, "ABORT",
                              "No partitions registered: not sending EndTxn");
                 rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_READY);

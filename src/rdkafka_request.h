@@ -55,6 +55,14 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
 			 const rd_kafka_buf_t *request, ...);
 
 
+rd_kafka_topic_partition_list_t *
+rd_kafka_buf_read_topic_partitions (rd_kafka_buf_t *rkbuf,
+                                    size_t estimated_part_cnt);
+void rd_kafka_buf_write_topic_partitions (
+        rd_kafka_buf_t *rkbuf,
+        rd_kafka_topic_partition_list_t *parts,
+        rd_bool_t write_Metadata);
+
 rd_kafka_resp_err_t
 rd_kafka_FindCoordinatorRequest (rd_kafka_broker_t *rkb,
                                  rd_kafka_coordtype_t coordtype,
@@ -292,6 +300,16 @@ rd_kafka_AddPartitionsToTxnRequest (rd_kafka_broker_t *rkb,
                                     rd_kafka_replyq_t replyq,
                                     rd_kafka_resp_cb_t *resp_cb,
                                     void *opaque);
+
+rd_kafka_resp_err_t
+rd_kafka_AddOffsetsToTxnRequest (rd_kafka_broker_t *rkb,
+                                 const char *transactional_id,
+                                 rd_kafka_pid_t pid,
+                                 const char *group_id,
+                                 char *errstr, size_t errstr_size,
+                                 rd_kafka_replyq_t replyq,
+                                 rd_kafka_resp_cb_t *resp_cb,
+                                 void *opaque);
 
 rd_kafka_resp_err_t
 rd_kafka_EndTxnRequest (rd_kafka_broker_t *rkb,

@@ -629,6 +629,9 @@ void rd_kafka_topic_partition_list_set_err (
         rd_kafka_topic_partition_list_t *rktparlist,
         rd_kafka_resp_err_t err);
 
+rd_kafka_resp_err_t rd_kafka_topic_partition_list_get_err (
+        const rd_kafka_topic_partition_list_t *rktparlist);
+
 int rd_kafka_topic_partition_list_regex_cnt (
         const rd_kafka_topic_partition_list_t *rktparlist);
 

@@ -3476,6 +3476,20 @@ void rd_kafka_topic_partition_list_set_err (
                 rktparlist->elems[i].err = err;
 }
 
+/**
+ * @brief Get the first set error in the partition list.
+ */
+rd_kafka_resp_err_t rd_kafka_topic_partition_list_get_err (
+        const rd_kafka_topic_partition_list_t *rktparlist) {
+        int i;
+
+        for (i = 0 ; i < rktparlist->cnt ; i++)
+                if (rktparlist->elems[i].err)
+                        return rktparlist->elems[i].err;
+
+        return RD_KAFKA_RESP_ERR_NO_ERROR;
+}
+
 
 /**
  * @returns the number of wildcard/regex topics

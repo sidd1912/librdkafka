@@ -208,6 +208,7 @@
     <ClCompile Include="..\src\rdkafka_background.c" />
     <ClCompile Include="..\src\rdkafka_idempotence.c" />
     <ClCompile Include="..\src\rdkafka_txnmgr.c" />
+    <ClCompile Include="..\src\rdkafka_coord.c" />
     <ClCompile Include="..\src\rdkafka_zstd.c" />
     <ClCompile Include="..\src\rdlist.c" />
     <ClCompile Include="..\src\rdlog.c" />

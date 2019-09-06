@@ -284,6 +284,10 @@ struct rd_kafka_broker_s { /* rd_kafka_broker_t */
          *   @locks rkb_lock */
         TAILQ_HEAD(, rd_kafka_broker_monitor_s) rkb_monitors;
 
+        /**< Coordinator request's broker monitor.
+         *   Will trigger the coord_req fsm on broker state change. */
+        rd_kafka_broker_monitor_t rkb_coord_monitor;
+
 	rd_kafka_secproto_t rkb_proto;
 
 	int                 rkb_down_reported;    /* Down event reported */
