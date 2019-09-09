@@ -58,9 +58,11 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
 rd_kafka_topic_partition_list_t *
 rd_kafka_buf_read_topic_partitions (rd_kafka_buf_t *rkbuf,
                                     size_t estimated_part_cnt);
-void rd_kafka_buf_write_topic_partitions (
+int rd_kafka_buf_write_topic_partitions (
         rd_kafka_buf_t *rkbuf,
-        rd_kafka_topic_partition_list_t *parts,
+        const rd_kafka_topic_partition_list_t *parts,
+        rd_bool_t skip_invalid_offsets,
+        rd_bool_t write_Epoch,
         rd_bool_t write_Metadata);
 
 rd_kafka_resp_err_t

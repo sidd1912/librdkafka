@@ -1158,10 +1158,11 @@ void rd_kafka_brokers_broadcast_state_change (rd_kafka_t *rk) {
  * @locality any
  */
 static rd_kafka_broker_t *
-rd_kafka_broker_random (rd_kafka_t *rk,
-                        int state,
-                        int (*filter) (rd_kafka_broker_t *rk, void *opaque),
-                        void *opaque) {
+rd_kafka_broker_random0 (const char *func, int line,
+                         rd_kafka_t *rk,
+                         int state,
+                         int (*filter) (rd_kafka_broker_t *rk, void *opaque),
+                         void *opaque) {
         rd_kafka_broker_t *rkb, *good = NULL;
         int cnt = 0;
 
@@ -1175,7 +1176,7 @@ rd_kafka_broker_random (rd_kafka_t *rk,
                         if (cnt < 1 || rd_jitter(0, cnt) < 1) {
                                 if (good)
                                         rd_kafka_broker_destroy(good);
-                                rd_kafka_broker_keep(rkb);
+                                rd_kafka_broker_keep_fl(func, line, rkb);
                                 good = rkb;
                         }
                         cnt += 1;
@@ -1185,6 +1186,10 @@ rd_kafka_broker_random (rd_kafka_t *rk,
 
         return good;
 }
+
+#define rd_kafka_broker_random(rk,state,filter,opaque)          \
+        rd_kafka_broker_random0(__FUNCTION__, __LINE__,         \
+                                rk, state, filter, opaque)
 
 
 /**
@@ -2365,7 +2370,7 @@ void rd_kafka_broker_buf_retry (rd_kafka_broker_t *rkb, rd_kafka_buf_t *rkbuf) {
                    rd_kafka_ApiKey2str(rkbuf->rkbuf_reqhdr.ApiKey),
                    rkbuf->rkbuf_reqhdr.ApiVersion,
                    rd_slice_size(&rkbuf->rkbuf_reader),
-                   rkbuf->rkbuf_retries, rkb->rkb_rk->rk_conf.max_retries,
+                   rkbuf->rkbuf_retries, rkbuf->rkbuf_max_retries,
                    rkbuf->rkbuf_corrid,
                    rkb->rkb_rk->rk_conf.retry_backoff_ms);
 
@@ -2575,6 +2580,23 @@ static void rd_kafka_broker_set_logname (rd_kafka_broker_t *rkb,
         rkb->rkb_logname = rd_strdup(logname);
         mtx_unlock(&rkb->rkb_logname_lock);
 }
+
+
+
+/**
+ * @brief Prepare destruction of the broker object.
+ *
+ * Since rd_kafka_broker_terminating() relies on the refcnt of the
+ * broker to reach 1, we need to loose any self-references
+ * to avoid a hang (waiting for refcnt decrease) on destruction.
+ *
+ * @locality broker thread
+ * @locks none
+ */
+static void rd_kafka_broker_prepare_destroy (rd_kafka_broker_t *rkb) {
+        rd_kafka_broker_monitor_del(&rkb->rkb_coord_monitor);
+}
+
 
 /**
  * @brief Serve a broker op (an op posted by another thread to be handled by
@@ -2907,6 +2929,8 @@ static int rd_kafka_broker_op_serve (rd_kafka_broker_t *rkb,
                 rd_kafka_broker_fail(rkb, LOG_DEBUG,
                                      RD_KAFKA_RESP_ERR__DESTROY,
                                      "Client is terminating");
+
+                rd_kafka_broker_prepare_destroy(rkb);
                 ret = 0;
                 break;
 
@@ -3726,9 +3750,6 @@ rd_kafka_fetch_reply_handle (rd_kafka_broker_t *rkb,
                                 rd_kafka_buf_read_i32(rkbuf,
                                                       &AbortedTxnCnt);
 
-                                rd_rkb_dbg(rkb, EOS, "XXXXXXXX",
-                                           "AbortedTxnCnt %d",
-                                           AbortedTxnCnt);
                                 if (rkb->rkb_rk->rk_conf.isolation_level ==
                                         RD_KAFKA_READ_UNCOMMITTED) {
 
@@ -4603,8 +4624,6 @@ static int rd_kafka_broker_thread_main (void *arg) {
                 }
 	}
 
-        rd_kafka_broker_monitor_del(&rkb->rkb_coord_monitor);
-
 	if (rkb->rkb_source != RD_KAFKA_INTERNAL) {
 		rd_kafka_wrlock(rkb->rkb_rk);
 		TAILQ_REMOVE(&rkb->rkb_rk->rk_brokers, rkb, rkb_link);
@@ -4699,6 +4718,7 @@ void rd_kafka_broker_destroy_final (rd_kafka_broker_t *rkb) {
 
 	rd_free(rkb);
 }
+
 
 /**
  * Returns the internal broker with refcnt increased.
@@ -5042,10 +5062,12 @@ void rd_kafka_broker_set_nodename (rd_kafka_broker_t *rkb,
  * @locks: rd_kafka_*lock() MUST be held
  * @remark caller must release rkb reference by rd_kafka_broker_destroy()
  */
-rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0 (rd_kafka_t *rk,
-                                                    int32_t nodeid,
-                                                    int state,
-                                                    rd_bool_t do_connect) {
+rd_kafka_broker_t *
+rd_kafka_broker_find_by_nodeid0_fl (const char *func, int line,
+                                    rd_kafka_t *rk,
+                                    int32_t nodeid,
+                                    int state,
+                                    rd_bool_t do_connect) {
         rd_kafka_broker_t *rkb;
         rd_kafka_broker_t skel = { .rkb_nodeid = nodeid };
 
@@ -5073,7 +5095,7 @@ rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0 (rd_kafka_t *rk,
                 }
         }
 
-        rd_kafka_broker_keep(rkb);
+        rd_kafka_broker_keep_fl(func, line, rkb);
         return rkb;
 }
 
@@ -5290,14 +5312,16 @@ int rd_kafka_brokers_add (rd_kafka_t *rk, const char *brokerlist) {
 /**
  * @brief Adds a new broker or updates an existing one.
  *
- * @returns the broker object with refcount increased, or NULL on error.
+ * @param rkbp if non-NULL, will be set to the broker object with
+ *             refcount increased, or NULL on error.
  *
  * @locks none
  * @locality any
  */
-rd_kafka_broker_t *
+void
 rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
-                        const struct rd_kafka_metadata_broker *mdb) {
+                        const struct rd_kafka_metadata_broker *mdb,
+                        rd_kafka_broker_t **rkbp) {
 	rd_kafka_broker_t *rkb;
         char nodename[RD_KAFKA_NODENAME_SIZE];
         int needs_update = 0;
@@ -5309,7 +5333,8 @@ rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
 		/* Dont update metadata while terminating, do this
 		 * after acquiring lock for proper synchronisation */
 		rd_kafka_wrunlock(rk);
-                return NULL;
+                if (rkbp)
+                        *rkbp = NULL;
 	}
 
 	if ((rkb = rd_kafka_broker_find_by_nodeid(rk, mdb->id))) {
@@ -5343,7 +5368,10 @@ rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
                 }
         }
 
-        return rkb;
+        if (rkbp)
+                *rkbp = rkb;
+        else if (rkb)
+                rd_kafka_broker_destroy(rkb);
 }
 
 

@@ -314,6 +314,8 @@ struct rd_kafka_broker_s { /* rd_kafka_broker_t */
 };
 
 #define rd_kafka_broker_keep(rkb)   rd_refcnt_add(&(rkb)->rkb_refcnt)
+#define rd_kafka_broker_keep_fl(FUNC,LINE,RKB)  \
+        rd_refcnt_add_fl(FUNC, LINE, &(RKB)->rkb_refcnt)
 #define rd_kafka_broker_lock(rkb)   mtx_lock(&(rkb)->rkb_lock)
 #define rd_kafka_broker_unlock(rkb) mtx_unlock(&(rkb)->rkb_lock)
 
@@ -383,10 +385,16 @@ int16_t rd_kafka_broker_ApiVersion_supported (rd_kafka_broker_t *rkb,
                                               int16_t minver, int16_t maxver,
                                               int *featuresp);
 
-rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0 (rd_kafka_t *rk,
-                                                    int32_t nodeid,
-                                                    int state,
-                                                    rd_bool_t do_connect);
+rd_kafka_broker_t *rd_kafka_broker_find_by_nodeid0_fl (const char *func,
+                                                       int line,
+                                                       rd_kafka_t *rk,
+                                                       int32_t nodeid,
+                                                       int state,
+                                                       rd_bool_t do_connect);
+
+#define rd_kafka_broker_find_by_nodeid0(rk,nodeid,state,do_connect) \
+        rd_kafka_broker_find_by_nodeid0_fl(__FUNCTION__,__LINE__,   \
+                                           rk,nodeid,state,do_connect)
 #define rd_kafka_broker_find_by_nodeid(rk,nodeid) \
         rd_kafka_broker_find_by_nodeid0(rk,nodeid,-1,rd_false)
 
@@ -457,9 +465,10 @@ void rd_kafka_broker_destroy_final (rd_kafka_broker_t *rkb);
                                  rd_kafka_broker_destroy_final(rkb))
 
 
-rd_kafka_broker_t *
+void
 rd_kafka_broker_update (rd_kafka_t *rk, rd_kafka_secproto_t proto,
-                        const struct rd_kafka_metadata_broker *mdb);
+                        const struct rd_kafka_metadata_broker *mdb,
+                        rd_kafka_broker_t **rkbp);
 rd_kafka_broker_t *rd_kafka_broker_add (rd_kafka_t *rk,
 					rd_kafka_confsource_t source,
 					rd_kafka_secproto_t proto,

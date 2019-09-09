@@ -425,7 +425,7 @@ static void rd_kafka_cgrp_handle_FindCoordinator (rd_kafka_t *rk,
                    "Group \"%.*s\" coordinator is %s:%i id %"PRId32,
                    RD_KAFKAP_STR_PR(rkcg->rkcg_group_id),
                    mdb.host, mdb.port, mdb.id);
-        rd_kafka_broker_update(rkb->rkb_rk, rkb->rkb_proto, &mdb);
+        rd_kafka_broker_update(rkb->rkb_rk, rkb->rkb_proto, &mdb, NULL);
 
         rd_kafka_cgrp_coord_update(rkcg, CoordId);
         rd_kafka_cgrp_serve(rkcg); /* Serve updated state, if possible */

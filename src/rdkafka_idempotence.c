@@ -163,8 +163,11 @@ static void rd_kafka_idemp_coord_monitor_cb (rd_kafka_broker_t *rkb) {
                 // FIXME
 
                 rd_kafka_wrlock(rk);
-                rd_kafka_idemp_set_state(rk,
-                                         RD_KAFKA_IDEMP_STATE_WAIT_TRANSPORT);
+                /* Don't change the state if we already have a pid assigned,
+                 * it will remain valid even though the connection went down */
+                if (rk->rk_eos.idemp_state != RD_KAFKA_IDEMP_STATE_ASSIGNED)
+                        rd_kafka_idemp_set_state(
+                                rk, RD_KAFKA_IDEMP_STATE_WAIT_TRANSPORT);
                 rd_kafka_wrunlock(rk);
 
         } else {

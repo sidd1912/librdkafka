@@ -825,6 +825,9 @@ static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
         rd_kafka_op_t *rko = opaque;
         int actions = 0;
         rd_kafka_topic_partition_list_t *partitions = NULL;
+        char errstr[512];
+
+        *errstr = '\0';
 
         if (err)
                 goto done;
@@ -837,7 +840,19 @@ static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
                 goto err_parse;
 
         /* FIXME, handle partitions */
+        rd_kafka_topic_partition_list_log(rk, "TXNOFFSRESP", RD_KAFKA_DBG_EOS,
+                                          partitions);
+
         err = rd_kafka_topic_partition_list_get_err(partitions);
+        if (err) {
+                char errparts[256];
+                rd_kafka_topic_partition_list_str(partitions,
+                                                  errparts, sizeof(errparts),
+                                                  RD_KAFKA_FMT_F_ONLY_ERR);
+                rd_snprintf(errstr, sizeof(errstr),
+                            "Failed to commit offsets to transaction: %s",
+                            errparts);
+        }
 
         goto done;
 
@@ -848,8 +863,27 @@ static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
         if (err)
                 rk->rk_eos.txn_req_cnt--;
 
+        actions = rd_kafka_err_action(
+                rkb, err, request,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR__TRANSPORT,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS,
+
+                // FIXME
+
+                RD_KAFKA_ERR_ACTION_END);
+
         rd_rkb_dbg(rkb, EOS, "TXNOFFSETS", "err %s, actions 0x%x",
                    rd_kafka_err2name(err), actions);
+
+        if (partitions)
+                rd_kafka_topic_partition_list_destroy(partitions);
 
         if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
                 rd_kafka_set_fatal_error(rk, err,
@@ -865,13 +899,17 @@ static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
                 /* FIXME */
                 // rd_kafka_buf_retry_on_coordinator(rk, _GROUP, group_id, req);
         } else if (actions & RD_KAFKA_ERR_ACTION_RETRY) {
-                rd_kafka_buf_retry(rkb, request);
-                return;
+                if (rd_kafka_buf_retry(rkb, request))
+                        return;
         }
 
 
         rko->rko_err = err;
-        // FIXME rko->rko_u.txn.errstr = rd_strdup(errstr);
+        if (!*errstr)
+                rd_snprintf(errstr, sizeof(errstr),
+                            "Failed to commit offsets to transaction: %s",
+                            rd_kafka_err2str(err));
+        rko->rko_u.txn.errstr = rd_strdup(errstr);
         rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
 }
 
@@ -895,6 +933,9 @@ rd_kafka_TxnOffsetCommitRequest_op (rd_kafka_broker_t *rkb,
         int16_t ApiVersion;
         rd_kafka_topic_partition_list_t *offsets = rko->rko_u.txn.offsets;
         rd_kafka_pid_t pid;
+        int cnt;
+
+        rd_assert(rk->rk_eos.txn_state == RD_KAFKA_TXN_STATE_IN_TRANSACTION);
 
         pid = rd_kafka_idemp_get_pid0(rk, RD_DO_LOCK);
         if (!rd_kafka_pid_valid(pid))
@@ -911,19 +952,33 @@ rd_kafka_TxnOffsetCommitRequest_op (rd_kafka_broker_t *rkb,
         /* transactional_id */
         rd_kafka_buf_write_str(rkbuf, rk->rk_conf.eos.transactional_id, -1);
 
+        /* group_id */
+        rd_kafka_buf_write_str(rkbuf, rko->rko_u.txn.group_id, -1);
+
         /* PID */
         rd_kafka_buf_write_i64(rkbuf, pid.id);
         rd_kafka_buf_write_i16(rkbuf, pid.epoch);
 
         /* Write per-partition offsets list */
-        rd_kafka_buf_write_topic_partitions(rkbuf,
-                                            rko->rko_u.txn.offsets,
-                                            rd_true/*write Metadata*/);
+        cnt = rd_kafka_buf_write_topic_partitions(
+                rkbuf,
+                rko->rko_u.txn.offsets,
+                rd_true /*skip invalid offsets*/,
+                rd_false/*dont write Epoch*/,
+                rd_true /*write Metadata*/);
+
+        if (!cnt) {
+                /* No valid partition offsets, don't commit. */
+                rd_kafka_buf_destroy(rkbuf);
+                return RD_KAFKA_RESP_ERR__NO_OFFSET;
+        }
+
+        rd_kafka_topic_partition_list_log(rk, "TXNOFFSET", RD_KAFKA_DBG_EOS,
+                                          rko->rko_u.txn.offsets);
 
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
 
-        /* Let the handler perform retries so we know what is going on */
-        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        rkbuf->rkbuf_max_retries = 3;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb,
                                        reply_opaque);
@@ -964,6 +1019,38 @@ static void rd_kafka_txn_handle_AddOffsetsToTxn (rd_kafka_t *rk,
         if (err)
                 rk->rk_eos.txn_req_cnt--;
 
+        actions = rd_kafka_err_action(
+                rkb, err, request,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR__TRANSPORT,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR_COORDINATOR_LOAD_IN_PROGRESS,
+
+                RD_KAFKA_ERR_ACTION_REFRESH,
+                RD_KAFKA_RESP_ERR_NOT_COORDINATOR,
+
+                RD_KAFKA_ERR_ACTION_RETRY,
+                RD_KAFKA_RESP_ERR_CONCURRENT_TRANSACTIONS,
+                /* FIXME: smaller retry backoff */
+
+                RD_KAFKA_ERR_ACTION_FATAL,
+                RD_KAFKA_RESP_ERR_INVALID_PRODUCER_EPOCH,
+
+                RD_KAFKA_ERR_ACTION_FATAL,
+                RD_KAFKA_RESP_ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED,
+
+                RD_KAFKA_ERR_ACTION_PERMANENT,
+                RD_KAFKA_RESP_ERR_GROUP_AUTHORIZATION_FAILED,
+
+                // FIXME: everything else is FATAL
+
+                RD_KAFKA_ERR_ACTION_END);
+
         rd_rkb_dbg(rkb, EOS, "ADDOFFSETS", "err %s, actions 0x%x",
                    rd_kafka_err2name(err), actions);
 
@@ -981,9 +1068,11 @@ static void rd_kafka_txn_handle_AddOffsetsToTxn (rd_kafka_t *rk,
                 /* FIXME */
                 // rd_kafka_buf_retry_on_coordinator(rk, _GROUP, group_id, req);
         } else if (actions & RD_KAFKA_ERR_ACTION_RETRY) {
-                rd_kafka_buf_retry(rk->rk_eos.txn_coord, request);
+                if (rd_kafka_buf_retry(rk->rk_eos.txn_coord, request))
+                        return;
+        }
 
-        } else if (!err) {
+        if (!err) {
                 /* Step 3: Commit offsets to transaction on the
                  *         group coordinator. */
                 rd_kafka_coord_req(rk,
@@ -1066,6 +1155,10 @@ rd_kafka_txn_op_send_offsets_to_transaction (rd_kafka_t *rk,
         return RD_KAFKA_OP_RES_KEEP; /* input rko was used for reply */
 }
 
+/**
+ * error returns:
+ *   ERR__TRANSPORT - retryable
+ */
 rd_kafka_resp_err_t
 rd_kafka_send_offsets_to_transaction (
         rd_kafka_t *rk,
@@ -1075,6 +1168,7 @@ rd_kafka_send_offsets_to_transaction (
         rd_kafka_op_t *rko;
         rd_kafka_op_t *reply;
         rd_kafka_resp_err_t err;
+        rd_kafka_topic_partition_list_t *valid_offsets;
 
         if ((err = rd_kafka_ensure_transactional(rk, errstr, errstr_size)))
                 return err;
@@ -1087,16 +1181,33 @@ rd_kafka_send_offsets_to_transaction (
                 return RD_KAFKA_RESP_ERR__INVALID_ARG;
         }
 
+        valid_offsets = rd_kafka_topic_partition_list_match(
+                offsets, rd_kafka_topic_partition_match_valid_offset, NULL);
+
+        if (valid_offsets->cnt == 0) {
+                rd_snprintf(errstr, errstr_size,
+                            "No valid offsets to commit");
+                rd_kafka_topic_partition_list_destroy(valid_offsets);
+                return RD_KAFKA_RESP_ERR__NO_OFFSET;
+        }
+
+
+        rd_kafka_topic_partition_list_sort_by_topic(valid_offsets);
+
         rko = rd_kafka_op_new_cb(rk, RD_KAFKA_OP_TXN,
                                  rd_kafka_txn_op_send_offsets_to_transaction);
-        rko->rko_u.txn.offsets = rd_kafka_topic_partition_list_copy(offsets);
+        rko->rko_u.txn.offsets = valid_offsets;
+        rd_kafka_topic_partition_list_log(rk, "SENDOFFSETS", RD_KAFKA_DBG_EOS,
+                                          rko->rko_u.txn.offsets);
         rko->rko_u.txn.group_id = rd_strdup(consumer_group_id);
 
         reply = rd_kafka_op_req(rk->rk_ops, rko, RD_POLL_INFINITE);
 
         if ((err = reply->rko_err))
                 rd_snprintf(errstr, errstr_size, "%s",
-                            reply->rko_u.txn.errstr);
+                            reply->rko_u.txn.errstr ?
+                            reply->rko_u.txn.errstr :
+                            rd_kafka_err2str(err));
 
         rd_kafka_op_destroy(reply);
 
@@ -1537,9 +1648,11 @@ rd_kafka_abort_transaction (rd_kafka_t *rk,
         rd_kafka_txn_clear_pending_partitions(rk);
         mtx_unlock(&rk->rk_eos.txn_pending_lock);
 
-        /* Purge all queued and in-flight messages */
+        /* Purge all queued messages.
+         * Will need to wait for messages in-flight since purging these
+         * messages may lead to gaps in the idempotent producer sequences. */
         err = rd_kafka_purge(rk,
-                             RD_KAFKA_PURGE_F_QUEUE|RD_KAFKA_PURGE_F_INFLIGHT|
+                             RD_KAFKA_PURGE_F_QUEUE|
                              RD_KAFKA_PURGE_F_ABORT_TXN);
 
         /* Serve delivery reports for the purged messages */

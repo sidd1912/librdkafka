@@ -614,6 +614,15 @@ rd_kafka_topic_partition_list_update (rd_kafka_topic_partition_list_t *dst,
 
 int rd_kafka_topic_partition_leader_cmp (const void *_a, const void *_b);
 
+/**
+ * @brief Match function that returns true if partition has a valid offset.
+ */
+static RD_UNUSED int rd_kafka_topic_partition_match_valid_offset (
+        const void *elem, const void *opaque) {
+        const rd_kafka_topic_partition_t *rktpar = elem;
+        return rktpar->offset >= 0;
+}
+
 rd_kafka_topic_partition_list_t *rd_kafka_topic_partition_list_match (
         const rd_kafka_topic_partition_list_t *rktparlist,
         int (*match) (const void *elem, const void *opaque),

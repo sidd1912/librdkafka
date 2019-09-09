@@ -844,7 +844,6 @@ void rd_kafka_destroy_final (rd_kafka_t *rk) {
 
         rd_kafka_assignors_term(rk);
 
-        rd_kafka_coord_cache_destroy(&rk->rk_coord_cache);
         rd_kafka_metadata_cache_destroy(rk);
 
         /* Terminate SASL provider */
@@ -1034,6 +1033,9 @@ static void rd_kafka_destroy_internal (rd_kafka_t *rk) {
         int i;
 
         rd_kafka_dbg(rk, ALL, "DESTROY", "Destroy internal");
+
+        /* Destroy the coordinator cache */
+        rd_kafka_coord_cache_destroy(&rk->rk_coord_cache);
 
         /* Trigger any state-change waiters (which should check the
          * terminate flag whenever they wake up). */

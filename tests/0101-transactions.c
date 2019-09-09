@@ -131,12 +131,15 @@ static void do_test_basic_producer_txn (const char *topic) {
                 /* Abort or commit transaction */
                 TEST_SAY("txn[%d]: %s" _C_CLR " transaction\n",
                          i, txn[i].abort ? _C_RED "Abort" : _C_GRN "Commit");
-                if (txn[i].abort)
+                if (txn[i].abort) {
+                        test_curr->ignore_dr_err = rd_true;
                         TEST_CALL__(rd_kafka_abort_transaction(
                                             p, errstr, sizeof(errstr)));
-                else
+                } else {
+                        test_curr->ignore_dr_err = rd_false;
                         TEST_CALL__(rd_kafka_commit_transaction(
                                             p, errstr, sizeof(errstr)));
+                }
 
                 if (!txn[i].sync)
                         /* Wait for delivery reports */
@@ -182,8 +185,19 @@ static void consume_messages (rd_kafka_t *c,
                         continue;
                 }
 
+                TEST_SAYL(3, "%s: consumed message %s [%d] @ %"PRId64"\n",
+                          rd_kafka_name(c),
+                          rd_kafka_topic_name(msgs[i]->rkt),
+                          msgs[i]->partition, msgs[i]->offset);
+
+
                 i++;
         }
+}
+
+static void destroy_messages (rd_kafka_message_t **msgs, int msgcnt) {
+        while (msgcnt-- > 0)
+                rd_kafka_message_destroy(msgs[msgcnt]);
 }
 
 
@@ -199,17 +213,18 @@ static void consume_messages (rd_kafka_t *c,
  * Every 3rd transaction is aborted.
  */
 void do_test_consumer_producer_txn (void) {
-        const char *input_topic =
-                test_mk_topic_name("0101-transactions-input", 1);
-        const char *output_topic =
-                test_mk_topic_name("0101-transactions-output", 1);
+        char *input_topic =
+                rd_strdup(test_mk_topic_name("0101-transactions-input", 1));
+        char *output_topic =
+                rd_strdup(test_mk_topic_name("0101-transactions-output", 1));
         const char *c1_groupid = input_topic;
         const char *c2_groupid = output_topic;
         rd_kafka_t *p1, *p2, *c1, *c2;
         rd_kafka_conf_t *conf, *tmpconf, *c1_conf;
         uint64_t testid;
-        int txncnt = 10;
-        int msgcnt = txncnt * 10;
+        const int txncnt = 10;
+        int txn;
+        int msgcnt = txncnt * 30;
         int committed_msgcnt = 0;
         char errstr[512];
         test_msgver_t expect_mv, actual_mv;
@@ -260,7 +275,7 @@ void do_test_consumer_producer_txn (void) {
         TEST_CALL__(rd_kafka_commit_transaction(p1, errstr, sizeof(errstr)));
         rd_kafka_destroy(p1);
 
-        /* Create Consumer 1 */
+        /* Create Consumer 1: reading msgs from input_topic (Producer 1) */
         tmpconf = rd_kafka_conf_dup(conf);
         test_conf_set(tmpconf, "isolation.level", "read_committed");
         test_conf_set(tmpconf, "auto.offset.reset", "earliest");
@@ -276,25 +291,33 @@ void do_test_consumer_producer_txn (void) {
         p2 = test_create_handle(RD_KAFKA_PRODUCER, tmpconf);
         TEST_CALL__(rd_kafka_init_transactions(p2, errstr, sizeof(errstr)));
 
-        /* Create Consumer 2 */
+        /* Create Consumer 2: reading msgs from output_topic (Producer 2) */
         tmpconf = rd_kafka_conf_dup(conf);
         test_conf_set(tmpconf, "isolation.level", "read_committed");
         test_conf_set(tmpconf, "auto.offset.reset", "earliest");
         c2 = test_create_consumer(c2_groupid, NULL, tmpconf, NULL);
-        test_consumer_subscribe(c1, output_topic);
+        test_consumer_subscribe(c2, output_topic);
 
         rd_kafka_conf_destroy(conf);
 
         /* Keep track of what messages to expect on the output topic */
         test_msgver_init(&expect_mv, testid);
 
-        while (txncnt-- > 0) {
-                int msgcnt = 10 * (1 + (txncnt % 3));
+        for (txn = 0 ; txn < txncnt ; txn++) {
+                int msgcnt = 10 * (1 + (txn % 3));
                 rd_kafka_message_t *msgs[msgcnt];
                 int i;
-                rd_bool_t do_abort = !(txncnt % 3);
+                rd_bool_t do_abort = !(txn % 3);
+                rd_bool_t recreate_consumer = do_abort && txn == 3;
                 rd_kafka_topic_partition_list_t *offsets;
                 rd_kafka_resp_err_t err;
+                int remains = msgcnt;
+
+                TEST_SAY(_C_BLU "Begin transaction #%d/%d "
+                         "(msgcnt=%d, do_abort=%s, recreate_consumer=%s)\n",
+                         txn, txncnt, msgcnt,
+                         do_abort ? "true":"false",
+                         recreate_consumer ? "true":"false");
 
                 consume_messages(c1, msgs, msgcnt);
 
@@ -305,7 +328,15 @@ void do_test_consumer_producer_txn (void) {
                         rd_kafka_message_t *msg = msgs[i];
 
                         if (!do_abort) {
-                                test_msgver_add_msg(&expect_mv, msg);
+                                /* The expected msgver based on the input topic
+                                 * will be compared to the actual msgver based
+                                 * on the output topic, so we need to
+                                 * override the topic name to match
+                                 * the actual msgver's output topic. */
+                                test_msgver_add_msg0(__FUNCTION__, __LINE__,
+                                                     rd_kafka_name(p2),
+                                                     &expect_mv, msg,
+                                                     output_topic);
                                 committed_msgcnt++;
                         }
 
@@ -317,12 +348,15 @@ void do_test_consumer_producer_txn (void) {
                                                                  msg->len),
                                                 RD_KAFKA_V_MSGFLAGS(
                                                         RD_KAFKA_MSG_F_COPY),
+                                                RD_KAFKA_V_OPAQUE(&remains),
                                                 RD_KAFKA_V_END);
                         TEST_ASSERT(!err, "produce failed: %s",
                                     rd_kafka_err2str(err));
 
                         rd_kafka_poll(p2, 0);
                 }
+
+                destroy_messages(msgs, msgcnt);
 
                 err = rd_kafka_assignment(c1, &offsets);
                 TEST_ASSERT(!err, "failed to get consumer assignment: %s",
@@ -340,15 +374,22 @@ void do_test_consumer_producer_txn (void) {
                 rd_kafka_topic_partition_list_destroy(offsets);
 
 
-                if (do_abort)
+                if (do_abort) {
+                        test_curr->ignore_dr_err = rd_true;
                         TEST_CALL__(rd_kafka_abort_transaction(
                                             p2, errstr, sizeof(errstr)));
-                else
+                } else {
+                        test_curr->ignore_dr_err = rd_false;
                         TEST_CALL__(rd_kafka_commit_transaction(
                                             p2, errstr, sizeof(errstr)));
+                }
+
+                TEST_ASSERT(remains == 0,
+                            "expected no remaining messages "
+                            "in-flight/in-queue, got %d", remains);
 
 
-                if (txncnt == 4) {
+                if (recreate_consumer) {
                         /* Recreate the consumer to pick up
                          * on the committed offset. */
                         TEST_SAY("Recreating consumer 1\n");
@@ -378,6 +419,9 @@ void do_test_consumer_producer_txn (void) {
         rd_kafka_destroy(c1);
         rd_kafka_destroy(c2);
         rd_kafka_destroy(p2);
+
+        rd_free(input_topic);
+        rd_free(output_topic);
 }
 
 

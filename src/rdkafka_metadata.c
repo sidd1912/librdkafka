@@ -444,7 +444,7 @@ rd_kafka_parse_Metadata (rd_kafka_broker_t *rkb,
                            md->brokers[i].port,
                            md->brokers[i].id);
                 rd_kafka_broker_update(rkb->rkb_rk, rkb->rkb_proto,
-                                       &md->brokers[i]);
+                                       &md->brokers[i], NULL);
         }
 
         /* Update partition count and leader for each topic we know about */

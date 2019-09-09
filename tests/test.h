@@ -307,15 +307,18 @@ struct test_mv_vs {
 
 void test_msgver_init (test_msgver_t *mv, uint64_t testid);
 void test_msgver_clear (test_msgver_t *mv);
-int test_msgver_add_msg00 (const char *func, int line, test_msgver_t *mv,
+int test_msgver_add_msg00 (const char *func, int line, const char *clientname,
+                           test_msgver_t *mv,
                            uint64_t testid,
                            const char *topic, int32_t partition,
                            int64_t offset, int64_t timestamp,
                            rd_kafka_resp_err_t err, int msgnum);
-int test_msgver_add_msg0 (const char *func, int line,
-			  test_msgver_t *mv, rd_kafka_message_t *rkm);
-#define test_msgver_add_msg(mv,rkm) \
-	test_msgver_add_msg0(__FUNCTION__,__LINE__,mv,rkm)
+int test_msgver_add_msg0 (const char *func, int line, const char *clientname,
+                          test_msgver_t *mv, rd_kafka_message_t *rkm,
+                          const char *override_topic);
+#define test_msgver_add_msg(rk,mv,rkm)                          \
+        test_msgver_add_msg0(__FUNCTION__,__LINE__,             \
+                             rd_kafka_name(rk),mv,rkm,NULL)
 
 /**
  * Flags to indicate what to verify.
@@ -584,6 +587,7 @@ rd_kafka_resp_err_t test_delete_all_test_topics (int timeout_ms);
         const char *_desc = RD_STRINGIFY(FUNC_W_ARGS);                  \
         rd_kafka_resp_err_t _err;                                       \
         TIMING_START(&_timing, "%s", _desc);                            \
+        TEST_SAYL(3, "Begin call %s\n", _desc);                         \
         _err = FUNC_W_ARGS;                                             \
         TIMING_STOP(&_timing);                                          \
         if (!_err)                                                      \

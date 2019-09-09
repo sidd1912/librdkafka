@@ -240,20 +240,22 @@ rd_kafka_buf_read_topic_partitions (rd_kafka_buf_t *rkbuf,
 /**
  * @brief Write a list of topic+partitions+offsets+extra to \p rkbuf
  *
- * @remark The \p parts list will be sorted.
+ * @returns the number of partitions written to buffer.
+ *
+ * @remark The \p parts list MUST be sorted.
  */
-void rd_kafka_buf_write_topic_partitions (
+int rd_kafka_buf_write_topic_partitions (
         rd_kafka_buf_t *rkbuf,
-        rd_kafka_topic_partition_list_t *parts,
+        const rd_kafka_topic_partition_list_t *parts,
+        rd_bool_t skip_invalid_offsets,
+        rd_bool_t write_Epoch,
         rd_bool_t write_Metadata) {
-
         size_t of_TopicArrayCnt;
         size_t of_PartArrayCnt = 0;
-        int topic_cnt = 0, part_cnt = 0;
+        int TopicArrayCnt = 0, PartArrayCnt = 0;
         int i;
         const char *last_topic = NULL;
-
-        rd_kafka_topic_partition_list_sort_by_topic(parts);
+        int cnt = 0;
 
         /* TopicArrayCnt */
         of_TopicArrayCnt = rd_kafka_buf_write_i32(rkbuf, 0); /* updated later */
@@ -261,19 +263,22 @@ void rd_kafka_buf_write_topic_partitions (
         for (i = 0 ; i < parts->cnt ; i++) {
                 const rd_kafka_topic_partition_t *rktpar = &parts->elems[i];
 
+                if (skip_invalid_offsets && rktpar->offset < 0)
+                        continue;
+
                 if (!last_topic || strcmp(rktpar->topic, last_topic)) {
                         /* Finish last topic, if any. */
                         if (of_PartArrayCnt > 0)
                                 rd_kafka_buf_update_i32(rkbuf,
                                                         of_PartArrayCnt,
-                                                        part_cnt);
+                                                        PartArrayCnt);
 
                         /* Topic */
                         rd_kafka_buf_write_str(rkbuf, rktpar->topic, -1);
-                        topic_cnt++;
+                        TopicArrayCnt++;
                         last_topic = rktpar->topic;
                         /* New topic so reset partition count */
-                        part_cnt = 0;
+                        PartArrayCnt = 0;
 
                         /* PartitionArrayCnt: updated later */
                         of_PartArrayCnt = rd_kafka_buf_write_i32(rkbuf, 0);
@@ -281,10 +286,18 @@ void rd_kafka_buf_write_topic_partitions (
 
                 /* Partition */
                 rd_kafka_buf_write_i32(rkbuf, rktpar->partition);
-                part_cnt++;
+                PartArrayCnt++;
 
                 /* Time/Offset */
-                rd_kafka_buf_write_i64(rkbuf, rktpar->offset);
+                if (rktpar->offset >= 0)
+                        rd_kafka_buf_write_i64(rkbuf, rktpar->offset);
+                else
+                        rd_kafka_buf_write_i64(rkbuf, -1);
+
+                if (write_Epoch) {
+                        /* CommittedLeaderEpoch */
+                        rd_kafka_buf_write_i32(rkbuf, -1);
+                }
 
                 if (write_Metadata) {
                         /* Metadata */
@@ -298,12 +311,18 @@ void rd_kafka_buf_write_topic_partitions (
                                                        rktpar->metadata,
                                                        rktpar->metadata_size);
                 }
+
+                cnt++;
         }
 
+        printf("## PartArrayCnt %d, TopicArrayCnt %d, for %d\n",
+               PartArrayCnt, TopicArrayCnt, parts->cnt);
         if (of_PartArrayCnt > 0) {
-                rd_kafka_buf_update_i32(rkbuf, of_PartArrayCnt, part_cnt);
-                rd_kafka_buf_update_i32(rkbuf, of_TopicArrayCnt, topic_cnt);
+                rd_kafka_buf_update_i32(rkbuf, of_PartArrayCnt, PartArrayCnt);
+                rd_kafka_buf_update_i32(rkbuf, of_TopicArrayCnt, TopicArrayCnt);
         }
+
+        return cnt;
 }
 
 
@@ -1400,7 +1419,7 @@ void rd_kafka_LeaveGroupRequest (rd_kafka_broker_t *rkb,
          * is shortened.
          * Retries are not needed. */
         rd_kafka_buf_set_abs_timeout(rkbuf, 5000, 0);
-        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
 }
@@ -1858,9 +1877,9 @@ void rd_kafka_ApiVersionRequest (rd_kafka_broker_t *rkb,
 
 	rd_kafka_buf_write_i32(rkbuf, 0); /* Empty array: request all APIs */
 
-	/* Non-supporting brokers will tear down the connection when they
-	 * receive an unknown API request, so dont retry request on failure. */
-	rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        /* Non-supporting brokers will tear down the connection when they
+         * receive an unknown API request, so dont retry request on failure. */
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
 	/* 0.9.0.x brokers will not close the connection on unsupported
 	 * API requests, so we minimize the timeout for the request.
@@ -1900,10 +1919,10 @@ void rd_kafka_SaslHandshakeRequest (rd_kafka_broker_t *rkb,
 
 	rd_kafka_buf_write_str(rkbuf, mechanism, mechlen);
 
-	/* Non-supporting brokers will tear down the conneciton when they
-	 * receive an unknown API request or where the SASL GSSAPI
-	 * token type is not recognized, so dont retry request on failure. */
-	rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        /* Non-supporting brokers will tear down the conneciton when they
+         * receive an unknown API request or where the SASL GSSAPI
+         * token type is not recognized, so dont retry request on failure. */
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
 	/* 0.9.0.x brokers will not close the connection on unsupported
 	 * API requests, so we minimize the timeout of the request.
@@ -2020,7 +2039,7 @@ void rd_kafka_SaslAuthenticateRequest (rd_kafka_broker_t *rkb,
 
         /* There are no errors that can be retried, instead
          * close down the connection and reconnect on failure. */
-        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
         if (replyq.q)
                 rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq,
@@ -3634,7 +3653,7 @@ rd_kafka_InitProducerIdRequest (rd_kafka_broker_t *rkb,
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
 
         /* Let the idempotence state handler perform retries */
-        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
 
@@ -3729,7 +3748,7 @@ rd_kafka_AddPartitionsToTxnRequest (rd_kafka_broker_t *rkb,
 
         /* Let the handler perform retries so that it can pick
          * up more added partitions. */
-        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
 
@@ -3782,6 +3801,8 @@ rd_kafka_AddOffsetsToTxnRequest (rd_kafka_broker_t *rkb,
         rd_kafka_buf_write_str(rkbuf, group_id, -1);
 
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
+
+        rkbuf->rkbuf_max_retries = 3;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
 
@@ -3838,7 +3859,7 @@ rd_kafka_EndTxnRequest (rd_kafka_broker_t *rkb,
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
 
         /* Let the handler perform retries */
-        rkbuf->rkbuf_retries = RD_KAFKA_BUF_NO_RETRIES;
+        rkbuf->rkbuf_max_retries = RD_KAFKA_BUF_NO_RETRIES;
 
         rd_kafka_broker_buf_enq_replyq(rkb, rkbuf, replyq, resp_cb, opaque);
 

@@ -44,6 +44,7 @@ void rd_kafka_coord_cache_entry_destroy (rd_kafka_coord_cache_t *cc,
         rd_kafka_broker_destroy(cce->cce_rkb);
         TAILQ_REMOVE(&cc->cc_entries, cce, cce_link);
         cc->cc_cnt--;
+        rd_free(cce);
 }
 
 
@@ -228,6 +229,7 @@ void rd_kafka_coord_req (rd_kafka_t *rk,
         creq->creq_rko = rko;
         creq->creq_replyq = replyq;
         creq->creq_resp_cb = resp_cb;
+        creq->creq_reply_opaque = reply_opaque;
 
         TAILQ_INSERT_TAIL(&rk->rk_coord_reqs, creq, creq_link);
 
@@ -307,7 +309,7 @@ rd_kafka_coord_req_handle_FindCoordinator (rd_kafka_t *rk,
         mdb.port = Port;
 
         /* Find, update or add broker */
-        coord = rd_kafka_broker_update(rk, rkb->rkb_proto, &mdb);
+        rd_kafka_broker_update(rk, rkb->rkb_proto, &mdb, &coord);
 
         if (!coord) {
                 err = RD_KAFKA_RESP_ERR__FAIL;

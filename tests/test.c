@@ -1413,7 +1413,7 @@ int main(int argc, char **argv) {
         test_init();
 
 #ifndef _MSC_VER
-        signal(SIGINT, test_sig_term);
+        //signal(SIGINT, test_sig_term);
 #endif
         tests_to_run = test_getenv("TESTS", NULL);
         tmpver = test_getenv("TEST_KAFKA_VERSION", NULL);
@@ -2545,7 +2545,8 @@ static void test_mv_mvec_sort (struct test_mv_mvec *mvec,
  *
  * @returns 1 if message is from the expected testid, else 0 (not added)
  */
-int test_msgver_add_msg00 (const char *func, int line, test_msgver_t *mv,
+int test_msgver_add_msg00 (const char *func, int line, const char *clientname,
+                           test_msgver_t *mv,
                            uint64_t testid,
                            const char *topic, int32_t partition,
                            int64_t offset, int64_t timestamp,
@@ -2553,8 +2554,11 @@ int test_msgver_add_msg00 (const char *func, int line, test_msgver_t *mv,
         struct test_mv_p *p;
         struct test_mv_m *m;
 
-        if (testid != mv->testid)
+        if (testid != mv->testid) {
+                TEST_SAYL(3, "%s:%d: %s: mismatching testid %"PRIu64" != %"PRIu64"\n",
+                          func, line, clientname, testid, mv->testid);
                 return 0; /* Ignore message */
+        }
 
         p = test_msgver_p_get(mv, topic, partition, 1);
 
@@ -2570,10 +2574,10 @@ int test_msgver_add_msg00 (const char *func, int line, test_msgver_t *mv,
         m->timestamp = timestamp;
 
         if (test_level > 2) {
-                TEST_SAY("%s:%d: "
+                TEST_SAY("%s:%d: %s: "
                          "Recv msg %s [%"PRId32"] offset %"PRId64" msgid %d "
                          "timestamp %"PRId64"\n",
-                         func, line,
+                         func, line, clientname,
                          p->topic, p->partition, m->offset, m->msgid,
                          m->timestamp);
         }
@@ -2588,10 +2592,14 @@ int test_msgver_add_msg00 (const char *func, int line, test_msgver_t *mv,
  *
  * Message must be a proper message or PARTITION_EOF.
  *
+ * @param override_topic if non-NULL, overrides the rkmessage's topic
+ *                       with this one.
+ *
  * @returns 1 if message is from the expected testid, else 0 (not added).
  */
-int test_msgver_add_msg0 (const char *func, int line,
-			  test_msgver_t *mv, rd_kafka_message_t *rkmessage) {
+int test_msgver_add_msg0 (const char *func, int line, const char *clientname,
+                          test_msgver_t *mv, rd_kafka_message_t *rkmessage,
+                          const char *override_topic) {
 	uint64_t in_testid;
 	int in_part;
 	int in_msgnum = -1;
@@ -2600,7 +2608,8 @@ int test_msgver_add_msg0 (const char *func, int line,
         size_t valsize;
 
         if (mv->fwd)
-                test_msgver_add_msg(mv->fwd, rkmessage);
+                test_msgver_add_msg0(func, line, clientname,
+                                     mv->fwd, rkmessage, override_topic);
 
 	if (rkmessage->err) {
 		if (rkmessage->err != RD_KAFKA_RESP_ERR__PARTITION_EOF)
@@ -2643,7 +2652,9 @@ int test_msgver_add_msg0 (const char *func, int line,
                                   (const char *)val);
         }
 
-        return test_msgver_add_msg00(func, line, mv, in_testid,
+        return test_msgver_add_msg00(func, line, clientname, mv, in_testid,
+                                     override_topic ?
+                                     override_topic :
                                      rd_kafka_topic_name(rkmessage->rkt),
                                      rkmessage->partition,
                                      rkmessage->offset,
@@ -3313,7 +3324,7 @@ void test_consumer_poll_no_msgs (const char *what, rd_kafka_t *rk,
                                  rd_kafka_topic_name(rkmessage->rkt),
                                  rkmessage->partition,
                                  rkmessage->offset);
-			test_msgver_add_msg(&mv, rkmessage);
+                        test_msgver_add_msg(rk, &mv, rkmessage);
 
                 } else if (rkmessage->err) {
                         TEST_FAIL("%s [%"PRId32"] error (offset %"PRId64
@@ -3326,7 +3337,7 @@ void test_consumer_poll_no_msgs (const char *what, rd_kafka_t *rk,
                                  rd_kafka_message_errstr(rkmessage));
 
                 } else {
-			if (test_msgver_add_msg(&mv, rkmessage)) {
+                        if (test_msgver_add_msg(rk, &mv, rkmessage)) {
 				TEST_MV_WARN(&mv,
 					     "Received unexpected message on "
 					     "%s [%"PRId32"] at offset "
@@ -3376,7 +3387,7 @@ int test_consumer_poll_once (rd_kafka_t *rk, test_msgver_t *mv, int timeout_ms){
 			 rkmessage->partition,
 			 rkmessage->offset);
 		if (mv)
-			test_msgver_add_msg(mv, rkmessage);
+			test_msgver_add_msg(rk, mv, rkmessage);
 		rd_kafka_message_destroy(rkmessage);
 		return RD_KAFKA_RESP_ERR__PARTITION_EOF;
 
@@ -3392,7 +3403,7 @@ int test_consumer_poll_once (rd_kafka_t *rk, test_msgver_t *mv, int timeout_ms){
 
 	} else {
 		if (mv)
-			test_msgver_add_msg(mv, rkmessage);
+			test_msgver_add_msg(rk, mv, rkmessage);
 	}
 
 	rd_kafka_message_destroy(rkmessage);
@@ -3430,7 +3441,7 @@ int test_consumer_poll (const char *what, rd_kafka_t *rk, uint64_t testid,
                                  rkmessage->offset);
                         TEST_ASSERT(exp_eof_cnt != 0, "expected no EOFs");
 			if (mv)
-				test_msgver_add_msg(mv, rkmessage);
+				test_msgver_add_msg(rk, mv, rkmessage);
                         eof_cnt++;
 
                 } else if (rkmessage->err) {
@@ -3444,7 +3455,7 @@ int test_consumer_poll (const char *what, rd_kafka_t *rk, uint64_t testid,
                                  rd_kafka_message_errstr(rkmessage));
 
                 } else {
-			if (!mv || test_msgver_add_msg(mv, rkmessage))
+			if (!mv || test_msgver_add_msg(rk, mv, rkmessage))
 				cnt++;
                 }
 
@@ -3686,6 +3697,10 @@ static void test_admin_create_topic (rd_kafka_t *use_rk,
         TEST_ASSERT(rkev, "Timed out waiting for CreateTopics result");
 
         TIMING_STOP(&t_create);
+
+        TEST_ASSERT(!rd_kafka_event_error(rkev),
+                    "CreateTopics failed: %s",
+                    rd_kafka_event_error_string(rkev));
 
         res = rd_kafka_event_CreateTopics_result(rkev);
         TEST_ASSERT(res, "Expected CreateTopics_result, not %s",

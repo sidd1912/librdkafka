@@ -527,8 +527,10 @@ struct rd_kafka_buf_s { /* rd_kafka_buf_t */
 	rd_refcnt_t rkbuf_refcnt;
 	void   *rkbuf_opaque;
 
-	int     rkbuf_retries;            /* Retries so far. */
-#define RD_KAFKA_BUF_NO_RETRIES  1000000  /* Do not retry */
+        int     rkbuf_max_retries;        /**< Maximum retries to attempt. */
+#define RD_KAFKA_BUF_NO_RETRIES 0         /**< Do not retry */
+        int     rkbuf_retries;            /**< Retries so far. */
+
 
         int     rkbuf_features;   /* Required feature(s) that must be
                                    * supported by broker. */

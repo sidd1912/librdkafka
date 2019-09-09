@@ -3349,7 +3349,6 @@ rd_kafka_topic_partition_list_str (const rd_kafka_topic_partition_list_t *rktpar
                                    int fmt_flags) {
         int i;
         size_t of = 0;
-        int trunc = 0;
 
         for (i = 0 ; i < rktparlist->cnt ; i++) {
                 const rd_kafka_topic_partition_t *rktpar =
@@ -3357,12 +3356,6 @@ rd_kafka_topic_partition_list_str (const rd_kafka_topic_partition_list_t *rktpar
                 char errstr[128];
                 char offsetstr[32];
                 int r;
-
-                if (trunc) {
-                        if (dest_size > 4)
-                                rd_snprintf(&dest[dest_size-4], 4, "...");
-                        break;
-                }
 
                 if (!rktpar->err && (fmt_flags & RD_KAFKA_FMT_F_ONLY_ERR))
                         continue;
@@ -3389,10 +3382,12 @@ rd_kafka_topic_partition_list_str (const rd_kafka_topic_partition_list_t *rktpar
                                 offsetstr,
                                 errstr);
 
-                if ((size_t)r >= dest_size-of)
-                        trunc++;
-                else
-                        of += r;
+                if ((size_t)r >= dest_size-of) {
+                        rd_snprintf(&dest[dest_size-4], 4, "...");
+                        break;
+                }
+
+                of += r;
         }
 
         return dest;
@@ -3629,7 +3624,7 @@ int rd_kafka_toppar_handle_purge_queues (rd_kafka_toppar_t *rktp,
         cnt = rd_kafka_msgq_len(&rkmq);
 
         if (purge_flags & RD_KAFKA_PURGE_F_ABORT_TXN) {
-                /* All messages in-queue and in-flight are purged
+                /* All messages in-queue are purged
                  * on abort_transaction(). Since these messages
                  * will not be produced (retried) we need to adjust the
                  * idempotence epoch's base msgid to skip the messages. */
