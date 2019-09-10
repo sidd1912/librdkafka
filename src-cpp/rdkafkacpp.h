@@ -2927,14 +2927,14 @@ class RD_EXPORT Producer : public virtual Handle {
    */
   virtual ErrorCode begin_transaction (std::string &errstr) = 0;
 
-  #if 0
   /**
    * @fixme blocking?
    */
-  virtual ErrorCode sendOffsetsToTransactions (std::vector<TopicPartition*> &offsets,
-                                               std::string group_id,
-                                               std::string errstr) = 0;
-#endif
+  virtual ErrorCode send_offsets_to_transaction (
+          const std::vector<TopicPartition*> &offsets,
+          const std::string &group_id,
+          std::string &errstr) = 0;
+
   /**
    * @brief
    *
@@ -2942,6 +2942,11 @@ class RD_EXPORT Producer : public virtual Handle {
    */
   virtual ErrorCode commit_transaction (std::string &errstr) = 0;
 
+  /**
+   * @brief
+   *
+   * @fixme blocking?
+   */
   virtual ErrorCode abort_transaction (std::string &errstr) = 0;
 };
 

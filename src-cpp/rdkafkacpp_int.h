@@ -1242,49 +1242,69 @@ class ProducerImpl : virtual public Producer, virtual public HandleImpl {
   }
 
   ErrorCode init_transactions (std::string &errstr) {
-          rd_kafka_resp_err_t c_err;
-          char errbuf[512];
+    rd_kafka_resp_err_t c_err;
+    char errbuf[512];
 
-          c_err = rd_kafka_init_transactions(rk_, errbuf, sizeof(errbuf));
-          if (c_err)
-                  errstr = errbuf;
+    c_err = rd_kafka_init_transactions(rk_, errbuf, sizeof(errbuf));
+    if (c_err)
+      errstr = errbuf;
 
-          return static_cast<ErrorCode>(c_err);
+    return static_cast<ErrorCode>(c_err);
   }
 
   ErrorCode begin_transaction (std::string &errstr) {
-          rd_kafka_resp_err_t c_err;
-          char errbuf[512];
+    rd_kafka_resp_err_t c_err;
+    char errbuf[512];
 
-          c_err = rd_kafka_begin_transaction(rk_, errbuf, sizeof(errbuf));
-          if (c_err)
-                  errstr = errbuf;
+    c_err = rd_kafka_begin_transaction(rk_, errbuf, sizeof(errbuf));
+    if (c_err)
+      errstr = errbuf;
 
-          return static_cast<ErrorCode>(c_err);
+    return static_cast<ErrorCode>(c_err);
+  }
+
+  ErrorCode send_offsets_to_transaction (
+      const std::vector<TopicPartition*> &offsets,
+      const std::string &group_id,
+      std::string &errstr) {
+    rd_kafka_resp_err_t c_err;
+    char errbuf[512];
+    rd_kafka_topic_partition_list_t *c_offsets = partitions_to_c_parts(offsets);
+
+    c_err = rd_kafka_send_offsets_to_transaction(rk_, c_offsets,
+                                                 group_id.c_str(),
+                                                 errbuf, sizeof(errbuf));
+
+    rd_kafka_topic_partition_list_destroy(c_offsets);
+
+    if (c_err)
+      errstr = errbuf;
+
+    return static_cast<ErrorCode>(c_err);
 
   }
 
   ErrorCode commit_transaction (std::string &errstr) {
-          rd_kafka_resp_err_t c_err;
-          char errbuf[512];
+    rd_kafka_resp_err_t c_err;
+    char errbuf[512];
 
-          c_err = rd_kafka_commit_transaction(rk_, errbuf, sizeof(errbuf));
-          if (c_err)
-                  errstr = errbuf;
+    c_err = rd_kafka_commit_transaction(rk_, errbuf, sizeof(errbuf));
+    if (c_err)
+      errstr = errbuf;
 
-          return static_cast<ErrorCode>(c_err);
+    return static_cast<ErrorCode>(c_err);
 
   }
 
   ErrorCode abort_transaction (std::string &errstr) {
-          rd_kafka_resp_err_t c_err;
-          char errbuf[512];
+    rd_kafka_resp_err_t c_err;
+    char errbuf[512];
 
-          c_err = rd_kafka_abort_transaction(rk_, errbuf, sizeof(errbuf));
-          if (c_err)
-                  errstr = errbuf;
+    c_err = rd_kafka_abort_transaction(rk_, errbuf, sizeof(errbuf));
+    if (c_err)
+      errstr = errbuf;
 
-          return static_cast<ErrorCode>(c_err);
+    return static_cast<ErrorCode>(c_err);
 
   }
 

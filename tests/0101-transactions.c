@@ -31,7 +31,7 @@
 #include "rdkafka.h"
 
 /**
- * @name Transaction test
+ * @name Producer transaction tests
  *
  */
 
@@ -41,7 +41,8 @@
  *        (only consumed output for verification).
  *        e.g., no consumer offsets to commit with transaction.
  */
-static void do_test_basic_producer_txn (const char *topic) {
+static void do_test_basic_producer_txn (void) {
+        const char *topic = test_mk_topic_name("0101_transactions", 1);
         const int partition_cnt = 4;
 #define _TXNCNT 4
         struct {
@@ -427,14 +428,10 @@ void do_test_consumer_producer_txn (void) {
 
 
 int main_0101_transactions (int argc, char **argv) {
-        const char *topic = test_mk_topic_name("0101_transactions", 1);
+
+        //do_test_basic_producer_txn();
 
         do_test_consumer_producer_txn();
-
-        do_test_basic_producer_txn(topic);
-
-        if (test_quick)
-                return 0;
 
         return 0;
 }
