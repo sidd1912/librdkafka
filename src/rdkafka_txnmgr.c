@@ -69,7 +69,7 @@ rd_kafka_ensure_transactional (const rd_kafka_t *rk,
                 rd_snprintf(errstr, errstr_size,
                             "transactional.id must be configured");
                 /* FIXME: better error code */
-                return RD_KAFKA_RESP_ERR__STATE;
+                return RD_KAFKA_RESP_ERR__NOT_CONFIGURED;
         }
 
         return RD_KAFKA_RESP_ERR_NO_ERROR;
@@ -614,9 +614,8 @@ rd_kafka_txn_op_init_transactions (rd_kafka_t *rk,
         rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR_NO_ERROR;
         char errstr[512];
 
-        rd_kafka_op_clear_cb(rko);
+        rd_kafka_op_reuse(rko);
 
-        rd_kafka_dbg(rk, EOS, "INITTXN", "init");
         if (rk->rk_eos.txn_curr_rko) {
                 /* This might happen if application is calling conflicting
                  * transactional APIs simultaneously from different threads. */
@@ -661,39 +660,6 @@ rd_kafka_txn_op_init_transactions (rd_kafka_t *rk,
 }
 
 
-/**
- * Needs to be called before any other methods when the transactional.id is set in the configuration.
- *
- * This method does the following:
- *   1. Ensures any transactions initiated by previous instances of the producer with the same
- *      transactional.id are completed. If the previous instance had failed with a transaction in
- *      progress, it will be aborted. If the last transaction had begun completion,
- *      but not yet finished, this method awaits its completion.
- *   2. Gets the internal producer id and epoch, used in all future transactional
- *      messages issued by the producer.
- *
- * Note that this method will raise {@link TimeoutException} if the transactional state cannot
- * be initialized before expiration of {@code max.block.ms}. Additionally, it will raise {@link InterruptException}
- * if interrupted. It is safe to retry in either case, but once the transactional state has been successfully
- * initialized, this method should no longer be used.
- *
- * @throws IllegalStateException if no transactional.id has been configured
- * @throws org.apache.kafka.common.errors.UnsupportedVersionException fatal error indicating the broker
- *         does not support transactions (i.e. if its version is lower than 0.11.0.0)
- * @throws org.apache.kafka.common.errors.AuthorizationException fatal error indicating that the configured
- *         transactional.id is not authorized. See the exception for more details
- * @throws KafkaException if the producer has encountered a previous fatal error or for any other unexpected error
- * @throws TimeoutException if the time taken for initialize the transaction has surpassed <code>max.block.ms</code>.
- * @throws InterruptException if the thread is interrupted while blocked
-
- *
- * @FIXME use max.block.ms, timeout_ms, or a queue?
- *
- * @returns RD_KAFKA_RESP_ERR__STATE If no transactional.id has been configured.
- *
- * @locality any thread
- * @locks none
- */
 rd_kafka_resp_err_t
 rd_kafka_init_transactions (rd_kafka_t *rk,
                             char *errstr, size_t errstr_size) {
@@ -734,7 +700,7 @@ rd_kafka_txn_op_begin_transaction (rd_kafka_t *rk,
         char errstr[512];
         rd_bool_t wakeup_brokers = rd_false;
 
-        rd_kafka_op_clear_cb(rko);
+        rd_kafka_op_reuse(rko);
 
         rd_kafka_wrlock(rk);
         if ((err = rd_kafka_txn_require_state(rk, RD_KAFKA_TXN_STATE_READY,
@@ -1126,7 +1092,7 @@ rd_kafka_txn_op_send_offsets_to_transaction (rd_kafka_t *rk,
         char errstr[512];
         rd_kafka_pid_t pid;
 
-        rd_kafka_op_clear_cb(rko);
+        rd_kafka_op_reuse(rko);
 
         rd_kafka_wrlock(rk);
 
@@ -1361,7 +1327,7 @@ rd_kafka_txn_op_commit_transaction (rd_kafka_t *rk,
         char errstr[512];
         rd_kafka_pid_t pid;
 
-        rd_kafka_op_clear_cb(rko);
+        rd_kafka_op_reuse(rko);
 
         rd_kafka_wrlock(rk);
 
@@ -1436,7 +1402,7 @@ rd_kafka_txn_op_begin_commit (rd_kafka_t *rk,
         rd_kafka_resp_err_t err;
         char errstr[512];
 
-        rd_kafka_op_clear_cb(rko);
+        rd_kafka_op_reuse(rko);
 
         if ((err = rd_kafka_txn_require_state(
                      rk, RD_KAFKA_TXN_STATE_IN_TRANSACTION,
@@ -1573,7 +1539,7 @@ rd_kafka_txn_op_abort_transaction (rd_kafka_t *rk,
 
         *errstr = '\0';
 
-        rd_kafka_op_clear_cb(rko);
+        rd_kafka_op_reuse(rko);
 
         rd_kafka_wrlock(rk);
 

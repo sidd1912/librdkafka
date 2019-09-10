@@ -365,6 +365,8 @@ typedef enum {
         RD_KAFKA_RESP_ERR__MAX_POLL_EXCEEDED = -147,
         /** Unknown broker */
         RD_KAFKA_RESP_ERR__UNKNOWN_BROKER = -146,
+        /** Functionality not configured */
+        RD_KAFKA_RESP_ERR__NOT_CONFIGURED = -145,
 
 	/** End internal error codes */
 	RD_KAFKA_RESP_ERR__END = -100,
@@ -6222,9 +6224,59 @@ rd_kafka_oauthbearer_set_token_failure (rd_kafka_t *rk, const char *errstr);
 /**@}*/
 
 /**
- * @name Transactional API
+ * @name Transactional producer API
  * @{
  *
+ */
+
+
+/**
+ * @brief Initialize transactions for the producer instance.
+ *
+ * Needs to be called before any other methods when the \c transactional.id
+ * is configured.
+ *
+ * This function ensures any transactions initiated by previous instances
+ * of the producer with the same \c transactional.id are completed.
+ * If the previous instance had failed with a transaction in progress, then the
+ * previous transaction will be aborted.
+ *
+ * If the last transaction had begun completion (following transaction commit)
+ * but not yet finished, this function will await the previous transaction's
+ * completion.
+ *
+ * When any previous transactions have been fenced this function
+ * will acquire the internal producer id and epoch, used in all future
+ * transactional messages issued by this producer.
+ *
+ * The producer has \c transactional.timeout.ms to perform at least one of
+ * the following operations to avoid timing out the transaction on the broker:
+ *   * rd_kafka_produce() (et.al)
+ *   * rd_kafka_send_offsets_to_transaction()
+ *   * rd_kafka_commit_transaction()
+ *   * rd_kafka_abort_transaction()
+ *
+ * @param rk Producer instance.
+ * @param errstr A human readable error string (nul-terminated) is written to
+ *               this location that must be of at least \p errstr_size bytes.
+ *               The \p errstr is only written to if there is a fatal error.
+ * @param errstr_size Writable size in \p errstr.
+ *
+ * @remark This function may block up to 60 seconds.
+ *
+ * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success,
+ *          RD_KAFKA_RESP_ERR__TIMED_OUT if the transaction coordinator
+ *          could be not be contacted within the 60 second timeout,
+ *          RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE if the transaction
+ *          coordinator is not available,
+ *          RD_KAFKA_RESP_ERR_CONCURRENT_TRANSACTIONS if a previous transaction
+ *          would not complete within the 60 second timeout,
+ *          RD_KAFKA_RESP_ERR__STATE if transactions are already initialized,
+ *          RD_KAFKA_RESP_ERR__NOT_CONFIGURED if transactions have not been
+ *          configured for the producer instance,
+ *          RD_KAFKA_RESP_ERR__INVALID_ARG if \p rk is not a producer instance.
+ *
+ * All errors except ERR__STATE and ERR__NOT_CONFIGURED are retryable.
  */
 
 RD_EXPORT

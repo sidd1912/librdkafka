@@ -386,7 +386,7 @@ static void txn_producer (const std::string &brokers, const std::string &topic,
   for (size_t i = 0 ; i < cmd_cnt ; i++) {
     std::string cmdstr = std::string(cmds[i]);
 
-    Test::Say(_C_RED "txn_producer: command: " + cmdstr + "\n");
+    Test::Say(_C_CLR "rdkafka txn producer command: " + cmdstr + "\n");
 
     std::vector<std::string> cmd = csv_split(cmdstr);
 

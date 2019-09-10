@@ -279,6 +279,10 @@ enum ErrorCode {
         ERR__GAPLESS_GUARANTEE = -148,
         /** Maximum poll interval exceeded */
         ERR__MAX_POLL_EXCEEDED = -147,
+        /** Unknown broker */
+        ERR__UNKNOWN_BROKER = -146,
+        /** Functionality not configured */
+        ERR__NOT_CONFIGURED = -145,
 
         /** End internal error codes */
 	ERR__END = -100,

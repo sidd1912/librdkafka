@@ -461,18 +461,10 @@ rd_kafka_op_t *rd_kafka_op_new_reply (rd_kafka_op_t *rko_orig,
 rd_kafka_op_t *rd_kafka_op_new_cb (rd_kafka_t *rk,
                                    rd_kafka_op_type_t type,
                                    rd_kafka_op_cb_t *cb);
+void rd_kafka_op_reuse (rd_kafka_op_t *rko);
 int rd_kafka_op_reply (rd_kafka_op_t *rko, rd_kafka_resp_err_t err);
 
 #define rd_kafka_op_set_prio(rko,prio) ((rko)->rko_prio = prio)
-
-/**
- * @brief Clear callback flag and function on op.
- *        Use this when replying with the original op.
- */
-static RD_INLINE RD_UNUSED void rd_kafka_op_clear_cb (rd_kafka_op_t *rko) {
-        rko->rko_type &= ~RD_KAFKA_OP_CB;
-        rko->rko_op_cb = NULL;
-}
 
 #define rd_kafka_op_err(rk,err,...) do {				\
 		if (!((rk)->rk_conf.enabled_events & RD_KAFKA_EVENT_ERROR)) { \

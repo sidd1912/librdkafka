@@ -477,6 +477,8 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
                   "(max.poll.interval.ms) exceeded"),
         _ERR_DESC(RD_KAFKA_RESP_ERR__UNKNOWN_BROKER,
                   "Local: Unknown broker"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR__NOT_CONFIGURED,
+                  "Local: Functionality not configured"),
 
 	_ERR_DESC(RD_KAFKA_RESP_ERR_UNKNOWN,
 		  "Unknown broker error"),

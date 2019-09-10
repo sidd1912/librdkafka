@@ -404,7 +404,7 @@ void rd_kafka_q_op_err (rd_kafka_q_t *rkq, rd_kafka_op_type_t optype,
 
 
 /**
- * Creates a reply opp based on 'rko_orig'.
+ * Creates a reply op based on 'rko_orig'.
  * If 'rko_orig' has rko_op_cb set the reply op will be OR:ed with
  * RD_KAFKA_OP_CB, else the reply type will be the original rko_type OR:ed
  * with RD_KAFKA_OP_REPLY.
@@ -413,7 +413,6 @@ rd_kafka_op_t *rd_kafka_op_new_reply (rd_kafka_op_t *rko_orig,
 				      rd_kafka_resp_err_t err) {
         rd_kafka_op_t *rko;
 
-        rd_kafka_op_clear_cb(rko_orig);
         rko = rd_kafka_op_new(rko_orig->rko_type | RD_KAFKA_OP_REPLY);
 	rd_kafka_op_get_reply_version(rko, rko_orig);
 	rko->rko_err     = err;
@@ -438,6 +437,18 @@ rd_kafka_op_t *rd_kafka_op_new_cb (rd_kafka_t *rk,
         return rko;
 }
 
+
+/**
+ * @brief Reuse op (for reply).
+ *
+ * Clear callback flag and function on op.
+ *
+ * Use this when replying with the original op.
+ */
+void rd_kafka_op_reuse (rd_kafka_op_t *rko) {
+        rko->rko_type &= ~RD_KAFKA_OP_CB;
+        rko->rko_op_cb = NULL;
+}
 
 
 /**
