@@ -429,7 +429,7 @@ void do_test_consumer_producer_txn (void) {
 
 int main_0101_transactions (int argc, char **argv) {
 
-        //do_test_basic_producer_txn();
+        do_test_basic_producer_txn();
 
         do_test_consumer_producer_txn();
 
