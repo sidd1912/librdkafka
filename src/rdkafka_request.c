@@ -202,8 +202,8 @@ rd_kafka_buf_read_topic_partitions (rd_kafka_buf_t *rkbuf,
                                         TopicArrayCnt);
 
 
-        parts = rd_kafka_topic_partition_list_new(RD_MAX((size_t)TopicArrayCnt,
-                                                         estimated_part_cnt));
+        parts = rd_kafka_topic_partition_list_new(
+                RD_MAX(TopicArrayCnt, (int)estimated_part_cnt));
 
         while (TopicArrayCnt-- > 0) {
                 rd_kafkap_str_t kTopic;
@@ -315,8 +315,6 @@ int rd_kafka_buf_write_topic_partitions (
                 cnt++;
         }
 
-        printf("## PartArrayCnt %d, TopicArrayCnt %d, for %d\n",
-               PartArrayCnt, TopicArrayCnt, parts->cnt);
         if (of_PartArrayCnt > 0) {
                 rd_kafka_buf_update_i32(rkbuf, of_PartArrayCnt, PartArrayCnt);
                 rd_kafka_buf_update_i32(rkbuf, of_TopicArrayCnt, TopicArrayCnt);

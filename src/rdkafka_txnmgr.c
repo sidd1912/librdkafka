@@ -268,6 +268,23 @@ static void rd_kafka_txn_handle_AddPartitionsToTxn (rd_kafka_t *rk,
         if (err)
                 goto done;
 
+        rd_kafka_rdlock(rk);
+        rd_assert(rk->rk_eos.txn_state !=
+                  RD_KAFKA_TXN_STATE_COMMITTING_TRANSACTION);
+
+        if (rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_IN_TRANSACTION &&
+            rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_BEGIN_COMMIT) {
+                /* Response received after aborting transaction */
+                rd_rkb_dbg(rkb, EOS, "ADDPARTS",
+                           "Ignoring outdated AddPartitionsToTxn response in "
+                           "state %s",
+                           rd_kafka_txn_state2str(rk->rk_eos.txn_state));
+                rd_kafka_rdunlock(rk);
+                err = RD_KAFKA_RESP_ERR__OUTDATED;
+                goto done;
+        }
+        rd_kafka_rdunlock(rk);
+
         rd_kafka_buf_read_throttle_time(rkbuf);
 
         rd_kafka_buf_read_i32(rkbuf, &TopicCnt);
@@ -391,6 +408,9 @@ static void rd_kafka_txn_handle_AddPartitionsToTxn (rd_kafka_t *rk,
  done:
         if (err)
                 rk->rk_eos.txn_req_cnt--;
+
+        if (err == RD_KAFKA_RESP_ERR__OUTDATED)
+                return;
 
         mtx_lock(&rk->rk_eos.txn_pending_lock);
         TAILQ_CONCAT(&rk->rk_eos.txn_pending_rktps,
@@ -1551,6 +1571,8 @@ rd_kafka_txn_op_abort_transaction (rd_kafka_t *rk,
         char errstr[512];
         rd_kafka_pid_t pid;
 
+        *errstr = '\0';
+
         rd_kafka_op_clear_cb(rko);
 
         rd_kafka_wrlock(rk);
@@ -1610,7 +1632,8 @@ rd_kafka_txn_op_abort_transaction (rd_kafka_t *rk,
         rd_kafka_wrunlock(rk);
 
         rko->rko_err = err;
-        rko->rko_u.txn.errstr = rd_strdup(errstr);
+        if (*errstr)
+                rko->rko_u.txn.errstr = rd_strdup(errstr);
 
         rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
 

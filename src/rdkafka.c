@@ -864,7 +864,9 @@ void rd_kafka_destroy_final (rd_kafka_t *rk) {
         }
 
 	/* Purge op-queues */
+        rd_dassert(rk->rk_rep->rkq_refcnt == 1);
 	rd_kafka_q_destroy_owner(rk->rk_rep);
+        rd_dassert(rk->rk_ops->rkq_refcnt == 1);
 	rd_kafka_q_destroy_owner(rk->rk_ops);
 
 #if WITH_SSL

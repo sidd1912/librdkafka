@@ -239,6 +239,7 @@ void rd_kafka_coord_req (rd_kafka_t *rk,
 
 static void
 rd_kafka_coord_req_destroy (rd_kafka_t *rk, rd_kafka_coord_req_t *creq) {
+        rd_kafka_replyq_destroy(&creq->creq_replyq);
         TAILQ_REMOVE(&rk->rk_coord_reqs, creq, creq_link);
         rd_free(creq->creq_coordkey);
         rd_free(creq);
@@ -437,6 +438,8 @@ rd_kafka_coord_req_fsm (rd_kafka_t *rk, rd_kafka_coord_req_t *creq) {
                 RD_KAFKA_REPLYQ(rk->rk_ops, 0),
                 rd_kafka_coord_req_handle_FindCoordinator,
                 creq);
+
+        rd_kafka_broker_destroy(rkb);
 
         if (err)
                 rd_kafka_coord_req_fail(rk, creq, err);
