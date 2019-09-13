@@ -33,10 +33,10 @@
 #include "rdkafka.h" /* for Kafka driver */
 
 /**
- * KafkaConsumer balanced group with multithreading tests
+ * KafkaConsumer static group membership tests
  *
- * Runs a consumer subscribing to a topic with multiple partitions and farms
- * consuming of each partition to a separate thread.
+ * Runs two consumers subscribing to  a topic simulating various
+ * reblance scenerios. 
  */
 
 typedef struct _consumer_s {
