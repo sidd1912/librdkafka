@@ -843,6 +843,11 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           _RK(group_id_str),
           "Client group id string. All clients sharing the same group.id "
           "belong to the same group." },
+        { _RK_GLOBAL|_RK_CGRP|_RK_HIGH, "group.instance.id", _RK_C_STR,
+          _RK(group_instance_id),
+          "Client group member instance id string. This value must be "
+          "unique for each member in the group. "
+          "If set the consumer is treated as a static member"},
         { _RK_GLOBAL|_RK_CGRP|_RK_MED, "partition.assignment.strategy",
           _RK_C_STR,
           _RK(partition_assignment_strategy),

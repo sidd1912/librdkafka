@@ -3744,6 +3744,14 @@ char *rd_kafka_memberid (const rd_kafka_t *rk) {
 	return memberid;
 }
 
+char *rd_kafka_group_instance_id (const rd_kafka_t *rk) {
+        rd_kafka_cgrp_t *rkcg;
+
+        if (!(rkcg = rd_kafka_cgrp_get(rk)))
+                return NULL;
+
+        return RD_KAFKAP_STR_DUP(rkcg->rkcg_group_instance_id);
+}
 
 char *rd_kafka_clusterid (rd_kafka_t *rk, int timeout_ms) {
         rd_ts_t abs_timeout = rd_timeout_init(timeout_ms);

@@ -1407,9 +1407,12 @@ typedef enum {
  * The properties are identical to the Apache Kafka configuration properties
  * whenever possible.
  *
+ * @remark A successfull call to rd_kafka_new() will assume ownership of
+ * the conf object and rd_kafka_conf_destroy() must not be called.
+ *
  * @returns A new rd_kafka_conf_t object with defaults set.
  *
- * @sa rd_kafka_conf_set(), rd_kafka_conf_destroy()
+ * @sa rd_kafka_new(), rd_kafka_conf_set(), rd_kafka_conf_destroy()
  */
 RD_EXPORT
 rd_kafka_conf_t *rd_kafka_conf_new(void);
@@ -2537,6 +2540,19 @@ rd_kafka_type_t rd_kafka_type(const rd_kafka_t *rk);
 RD_EXPORT
 char *rd_kafka_memberid (const rd_kafka_t *rk);
 
+
+/**
+ * @brief Returns this client's user-assigned group instance id
+ *
+ * @remark This requires the high-level KafkaConsumer
+ *
+ * @returns An allocated string containing the current user-assigned group
+ *          instance id, or NULL if not available.
+ *          The application must free the string with \p free() or
+ *          rd_kafka_mem_free()
+ */
+RD_EXPORT
+char *rd_kafka_group_instance_id (const rd_kafka_t *rk);
 
 
 /**
