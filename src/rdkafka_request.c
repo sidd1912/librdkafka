@@ -121,6 +121,10 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
         {
         case RD_KAFKA_RESP_ERR_NO_ERROR:
                 break;
+        case RD_KAFKA_RESP_ERR_MEMBER_ID_REQUIRED:
+                actions |= RD_KAFKA_ERR_ACTION_IGNORE|
+                        RD_KAFKA_ERR_ACTION_MSG_NOT_PERSISTED;
+                break;
         case RD_KAFKA_RESP_ERR_LEADER_NOT_AVAILABLE:
         case RD_KAFKA_RESP_ERR_NOT_LEADER_FOR_PARTITION:
         case RD_KAFKA_RESP_ERR_BROKER_NOT_AVAILABLE:
@@ -143,7 +147,7 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
         case RD_KAFKA_RESP_ERR__TIMED_OUT_QUEUE:
                 /* Client-side wait-response/in-queue timeout */
         case RD_KAFKA_RESP_ERR_NOT_ENOUGH_REPLICAS:
-        case RD_KAFKA_RESP_ERR__TRANSPORT:
+        case RD_KAFKA_RESP_ERR__TRANSPORT:        
                 actions |= RD_KAFKA_ERR_ACTION_RETRY|
                         RD_KAFKA_ERR_ACTION_MSG_NOT_PERSISTED;
                 break;
