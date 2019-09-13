@@ -1253,6 +1253,19 @@ void rd_kafka_JoinGroupRequest (rd_kafka_broker_t *rkb,
                            rk->rk_conf.group_session_timeout_ms);
 
 
+        if (ApiVersion < 5 &&
+            rk->rk_conf.group_instance_id &&
+            rd_interval(&rkb->rkb_suppress.unsupported_kip345,
+                        /* at most once per day */
+                        (rd_ts_t)86400 * 1000 * 1000, 0) > 0)
+                rd_rkb_log(rkb, LOG_NOTICE, "MAXPOLL",
+                           "Broker does not support KIP-345 "
+                           "(requires Apache Kafka >= v0.2.3.0): "
+                           "consumer configuration "
+                           "`group.instance.id` (%s) "
+                           "will not take effect.",
+                           rk->rk_conf.group_instance_id);
+
         /* Absolute timeout */
         rd_kafka_buf_set_abs_timeout_force(
                 rkbuf,
