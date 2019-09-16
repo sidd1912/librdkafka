@@ -45,6 +45,9 @@ void rd_kafka_group_member_clear (rd_kafka_group_member_t *rkgm) {
         if (rkgm->rkgm_member_id)
                 rd_kafkap_str_destroy(rkgm->rkgm_member_id);
 
+        if (rkgm->rkgm_group_instance_id)
+                rd_kafkap_str_destroy(rkgm->rkgm_group_instance_id);
+
         if (rkgm->rkgm_userdata)
                 rd_kafkap_bytes_destroy(rkgm->rkgm_userdata);
 
