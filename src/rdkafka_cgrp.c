@@ -958,9 +958,10 @@ static void rd_kafka_cgrp_handle_JoinGroup (rd_kafka_t *rk,
                 members = rd_calloc(member_cnt, sizeof(*members));
 
                 for (i = 0 ; i < member_cnt ; i++) {
-                        rd_kafkap_str_t MemberId, GroupInstanceId;
+                        rd_kafkap_str_t MemberId;
                         rd_kafkap_bytes_t MemberMetadata;
                         rd_kafka_group_member_t *rkgm;
+                        rd_kafkap_str_t GroupInstanceId = RD_KAFKAP_STR_INITIALIZER;
 
                         rd_kafka_buf_read_str(rkbuf, &MemberId);
                         if (request->rkbuf_reqhdr.ApiVersion >= 5)
