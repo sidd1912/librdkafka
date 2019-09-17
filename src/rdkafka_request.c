@@ -742,6 +742,9 @@ rd_kafka_handle_OffsetCommit (rd_kafka_t *rk,
         if (err)
 		goto err;
 
+        if (request->rkbuf_reqhdr.ApiVersion >= 3)
+                rd_kafka_buf_read_throttle_time(rkbuf);
+
         rd_kafka_buf_read_i32(rkbuf, &TopicArrayCnt);
         for (i = 0 ; i < TopicArrayCnt ; i++) {
                 rd_kafkap_str_t topic;
