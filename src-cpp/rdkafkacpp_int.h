@@ -1241,11 +1241,12 @@ class ProducerImpl : virtual public Producer, virtual public HandleImpl {
                                                                 (int)purge_flags));
   }
 
-  ErrorCode init_transactions (std::string &errstr) {
+  ErrorCode init_transactions (int timeout_ms, std::string &errstr) {
     rd_kafka_resp_err_t c_err;
     char errbuf[512];
 
-    c_err = rd_kafka_init_transactions(rk_, errbuf, sizeof(errbuf));
+    c_err = rd_kafka_init_transactions(rk_, timeout_ms,
+                                       errbuf, sizeof(errbuf));
     if (c_err)
       errstr = errbuf;
 

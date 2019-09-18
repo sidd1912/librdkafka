@@ -430,7 +430,8 @@ static void txn_producer (const std::string &brokers, const std::string &topic,
 
         /* Init transactions if producer is transactional */
         if (txntype != TransactionType_None) {
-          RdKafka::ErrorCode err = producer->init_transactions(errstr);
+          RdKafka::ErrorCode err = producer->init_transactions(20*1000,
+                                                               errstr);
           if (err)
             Test::Fail("init_transactions() failed: " + errstr);
         }
@@ -456,6 +457,7 @@ static void txn_producer (const std::string &brokers, const std::string &topic,
     }
   }
 
+  delete conf;
 
   for (std::map<std::string, RdKafka::Producer *>::iterator it =
          producers.begin(); it != producers.end() ; it++)

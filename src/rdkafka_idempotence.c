@@ -350,13 +350,17 @@ rd_kafka_idemp_handle_FindCoordinator (rd_kafka_t *rk,
                 RD_KAFKA_ERR_ACTION_END);
 
         if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
-                /* FIXME */
+                /* FIXME: move this to txnmgr */
                 rd_kafka_set_fatal_error(
                         rkb->rkb_rk, err,
                         "Failed to find transaction coordinator: %s: %s%s%s",
                         rd_kafka_broker_name(rkb),
                         rd_kafka_err2str(err),
                         *errstr ? ": " : "", errstr);
+
+                rd_kafka_wrlock(rk);
+                rd_kafka_idemp_set_state(rk, RD_KAFKA_IDEMP_STATE_FATAL_ERROR);
+                rd_kafka_wrunlock(rk);
                 return;
         }
 
@@ -574,10 +578,15 @@ void rd_kafka_idemp_request_pid_failed (rd_kafka_broker_t *rkb,
         case RD_KAFKA_RESP_ERR_INVALID_TRANSACTION_TIMEOUT:
         case RD_KAFKA_RESP_ERR__UNSUPPORTED_FEATURE:
                 /* Fatal errors */
+                /* FIXME Move this to txnmgr */
                 rd_kafka_set_fatal_error(
                         rkb->rkb_rk, err,
                         "Failed to acquire PID from broker %s: %s",
                         rd_kafka_broker_name(rkb), rd_kafka_err2str(err));
+
+                rd_kafka_wrlock(rk);
+                rd_kafka_idemp_set_state(rk, RD_KAFKA_IDEMP_STATE_FATAL_ERROR);
+                rd_kafka_wrunlock(rk);
                 return;
 
         default:

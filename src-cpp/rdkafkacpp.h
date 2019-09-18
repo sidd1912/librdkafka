@@ -2924,7 +2924,8 @@ class RD_EXPORT Producer : public virtual Handle {
    *
    * @fixme blocking?
    */
-  virtual ErrorCode init_transactions (std::string &errstr) = 0;
+  virtual ErrorCode init_transactions (int timeout_ms,
+                                       std::string &errstr) = 0;
 
   /**
    * @fixme blocking?

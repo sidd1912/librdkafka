@@ -27,16 +27,6 @@
  */
 
 /**
- * Questions:
- *
- * - initTransactions(): there are two asynchronous operations, one is
- *   is the coordinator lookup and the other is the InitProducerIdRequest.
- *   Both may need to be retried.
- *   The Java Producer uses `max.block.ms` to limit the maximum amount this
- *   make take, but I'd rather not add that configuration property since
- *   it mixes up APIs with user configuration. So, the alternatives are:
- *    a) a timeout_ms argument, b) truly asynchronous with queue_t
- *
  * FIXME: how to propagate Abortable errors
  *
  */
@@ -46,6 +36,10 @@
 #include "rdkafka_txnmgr.h"
 #include "rdkafka_idempotence.h"
 #include "rdkafka_request.h"
+
+
+static void rd_kafka_txn_cancel_op_timeout (rd_kafka_t *rk);
+static void rd_kafka_txn_op_timeout_cb (rd_kafka_timers_t *rkts, void *arg);
 
 
 /**
@@ -142,6 +136,87 @@ static void rd_kafka_txn_set_state (rd_kafka_t *rk,
 }
 
 
+/**
+ * @brief An unrecoverable transactional error has occurred.
+ *
+ * @locality rdkafka main thread
+ * @locks rd_kafka_wrlock MUST NOT be held
+ */
+static void rd_kafka_txn_set_fatal_error (rd_kafka_t *rk,
+                                          rd_kafka_resp_err_t err,
+                                          const char *fmt, ...) {
+        char errstr[512];
+        va_list ap;
+
+        if (rd_kafka_fatal_error(rk, NULL, 0)) {
+                rd_kafka_dbg(rk, EOS, "FATAL",
+                             "Not propagating fatal transactional error (%s) "
+                             "since previous fatal error already raised",
+                             rd_kafka_err2name(err));
+                return;
+        }
+
+        va_start(ap, fmt);
+        vsnprintf(errstr, sizeof(errstr), fmt, ap);
+        va_end(ap);
+
+        rd_kafka_log(rk, LOG_CRIT, "TXNERR",
+                     "Fatal transaction error: %s (%s)",
+                     errstr, rd_kafka_err2name(err));
+
+        rd_kafka_set_fatal_error(rk, err, "%s", errstr);
+
+        rd_kafka_wrlock(rk);
+        rk->rk_eos.txn_err = err;
+        if (rk->rk_eos.txn_errstr)
+                rd_free(rk->rk_eos.txn_errstr);
+        rk->rk_eos.txn_errstr = rd_strdup(errstr);
+
+        rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
+        rd_kafka_wrunlock(rk);
+}
+
+
+/**
+ * @brief An abortable/recoverable transactional error has occured.
+ *
+ * @locality rdkafka main thread
+ * @locks rd_kafka_wrlock MUST NOT be held
+ */
+static void rd_kafka_txn_set_abortable_error (rd_kafka_t *rk,
+                                              rd_kafka_resp_err_t err,
+                                              const char *fmt, ...) {
+        char errstr[512];
+        va_list ap;
+
+        if (rd_kafka_fatal_error(rk, NULL, 0)) {
+                rd_kafka_dbg(rk, EOS, "FATAL",
+                             "Not propagating abortable transactional "
+                             "error (%s) "
+                             "since previous fatal error already raised",
+                             rd_kafka_err2name(err));
+                return;
+        }
+
+        va_start(ap, fmt);
+        vsnprintf(errstr, sizeof(errstr), fmt, ap);
+        va_end(ap);
+
+        rd_kafka_log(rk, LOG_ERR, "TXNERR",
+                     "Abortable transaction error: %s (%s)",
+                     errstr, rd_kafka_err2name(err));
+
+        rd_kafka_wrlock(rk);
+        rk->rk_eos.txn_err = err;
+        if (rk->rk_eos.txn_errstr)
+                rd_free(rk->rk_eos.txn_errstr);
+        rk->rk_eos.txn_errstr = rd_strdup(errstr);
+
+        rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_ABORTABLE_ERROR);
+        rd_kafka_wrunlock(rk);
+}
+
+
 
 /**
  * @brief Send op reply to the application which is blocking
@@ -150,25 +225,33 @@ static void rd_kafka_txn_set_state (rd_kafka_t *rk,
  * @locality rdkafka main thread
  * @locks none needed
  */
-void rd_kafka_txn_reply_app (rd_kafka_t *rk,
-                             rd_kafka_resp_err_t err, const char *errstr) {
+static void rd_kafka_txn_reply_app (rd_kafka_t *rk, rd_kafka_resp_err_t err,
+                                    const char *errstr_fmt, ...) {
         rd_kafka_op_t *rko;
 
-        if (!(rko = rk->rk_eos.txn_curr_rko))
+        if (!(rko = rk->rk_eos.txn_curr_op))
                 return;
 
-        rk->rk_eos.txn_curr_rko = NULL;
+        rd_kafka_txn_cancel_op_timeout(rk);
+
+        rk->rk_eos.txn_curr_op = NULL;
 
         rko->rko_err = err;
-        if (errstr)
+        if (errstr_fmt && *errstr_fmt) {
+                va_list ap;
+                char errstr[512];
+                va_start(ap, errstr_fmt);
+                rd_vsnprintf(errstr, sizeof(errstr), errstr_fmt, ap);
+                va_end(ap);
                 rko->rko_u.txn.errstr = rd_strdup(errstr);
+        }
 
         rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
 }
 
 
 /**
- * @brief The underlying idempotent producer state change,
+ * @brief The underlying idempotent producer state changed,
  *        see if this affects the transactional operations.
  *
  * @locality rdkafka main thread
@@ -194,9 +277,20 @@ void rd_kafka_txn_idemp_state_change (rd_kafka_t *rk,
 
         default:
                 rd_kafka_dbg(rk, EOS, "IDEMPSTATE",
-                             "Unhandled state change Idemp=%s Txn=%s",
+                             "Ignored idempotent producer state change "
+                             "Idemp=%s Txn=%s",
                              rd_kafka_idemp_state2str(idemp_state),
                              rd_kafka_txn_state2str(rk->rk_eos.txn_state));
+        }
+
+        if (idemp_state == RD_KAFKA_IDEMP_STATE_FATAL_ERROR &&
+            rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_FATAL_ERROR) {
+                /* A fatal error has been raised. */
+
+                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
+
+                rd_kafka_txn_reply_app(rk, rd_atomic32_get(&rk->rk_fatal.err),
+                                       "%s", rk->rk_fatal.errstr);
         }
 }
 
@@ -430,13 +524,10 @@ static void rd_kafka_txn_handle_AddPartitionsToTxn (rd_kafka_t *rk,
                    rd_kafka_err2name(err), actions);
 
         if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
-                rd_kafka_set_fatal_error(rk, err,
-                                         "Failed to add partitions to "
-                                         "transaction: %s",
-                                         rd_kafka_err2str(err));
-                rd_kafka_wrlock(rk);
-                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
-                rd_kafka_wrunlock(rk);
+                rd_kafka_txn_set_fatal_error(rk, err,
+                                             "Failed to add partitions to "
+                                             "transaction: %s",
+                                             rd_kafka_err2str(err));
 
         } else if (actions & RD_KAFKA_ERR_ACTION_REFRESH) {
                 /* Requery for coordinator? */
@@ -602,6 +693,45 @@ static void rd_kafka_txn_clear_partitions (rd_kafka_t *rk) {
 
 
 /**
+ * @brief Cancel the current op timeout timer.
+ *
+ * @locality rdkafka main thread
+ * @locks none
+ */
+static void rd_kafka_txn_cancel_op_timeout (rd_kafka_t *rk) {
+        rd_kafka_timer_stop(&rk->rk_timers, &rk->rk_eos.txn_curr_op_tmr,
+                            RD_DO_LOCK);
+}
+
+
+/**
+ * @brief Sets the current op (representing a blocking application API call)
+ *        and a timeout for the same.
+ *
+ * If the timeout expires the rko will fail with ERR__TIMED_OUT
+ * and the txnmgr state will be adjusted reasonably.
+ *
+ * Use rd_kafka_txn_clear_op() when operation finishes prior to the timeout.
+ *
+ * @locality rdkafka main thread
+ * @locks none
+ */
+static void rd_kafka_txn_set_op_and_timeout (rd_kafka_t *rk,
+                                             rd_kafka_op_t *rko,
+                                             int timeout_ms) {
+        rd_assert(!rk->rk_eos.txn_curr_op);
+        rd_assert(rko);
+
+        rk->rk_eos.txn_curr_op = rko;
+
+        rd_kafka_timer_start_oneshot(&rk->rk_timers,
+                                     &rk->rk_eos.txn_curr_op_tmr, rd_false,
+                                     timeout_ms * 1000,
+                                     rd_kafka_txn_op_timeout_cb, rk);
+}
+
+
+/**
  * @brief Async handler for init_transactions()
  *
  * @locks none
@@ -612,47 +742,73 @@ rd_kafka_txn_op_init_transactions (rd_kafka_t *rk,
                                    rd_kafka_q_t *rkq,
                                    rd_kafka_op_t *rko) {
         rd_kafka_resp_err_t err = RD_KAFKA_RESP_ERR_NO_ERROR;
+        rd_bool_t do_start = rd_true;
         char errstr[512];
+
+        *errstr = '\0';
 
         rd_kafka_op_reuse(rko);
 
-        if (rk->rk_eos.txn_curr_rko) {
+        if (rk->rk_eos.txn_curr_op) {
                 /* This might happen if application is calling conflicting
                  * transactional APIs simultaneously from different threads. */
                 rd_snprintf(errstr, sizeof(errstr),
                             "Conflicting transactional call "
                             "already in progress");
                 err = RD_KAFKA_RESP_ERR__CONFLICT;
-                goto err;
+                goto done;
         }
 
         rd_kafka_wrlock(rk);
 
-        if (rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_INIT) {
-                rd_snprintf(errstr, sizeof(errstr),
-                            "Unable to initialize transactions in state %s: "
-                            "already initialized",
-                            rd_kafka_txn_state2str(rk->rk_eos.txn_state));
+        if (rk->rk_eos.txn_state == RD_KAFKA_TXN_STATE_READY) {
+                /* Application previously called init_transaction() and
+                 * is now calling it again, typically because the previous
+                 * call timed out. In the meantime the init has finished
+                 * in the background, so just return successfully. */
                 rd_kafka_wrunlock(rk);
-                err = RD_KAFKA_RESP_ERR__STATE;
-                goto err;
+                goto done;
+
+        } else if (rk->rk_eos.txn_state == RD_KAFKA_TXN_STATE_WAIT_PID) {
+                /* Application previously called init_transaction() and
+                 * is now calling it again, typically because the previous
+                 * call timed out. The PID is still being acquired,
+                 * so block until timeout or PID is acquired. */
+                do_start = rd_false;
+
+        } else  if (rk->rk_eos.txn_state != RD_KAFKA_TXN_STATE_INIT) {
+                if (rk->rk_eos.txn_err) {
+                        rd_snprintf(errstr, sizeof(errstr),
+                                    "%s", rk->rk_eos.txn_errstr);
+                        err = rk->rk_eos.txn_err;
+                } else {
+                        rd_snprintf(errstr, sizeof(errstr),
+                                    "Unable to initialize transactions in "
+                                    "state %s: already initialized",
+                                    rd_kafka_txn_state2str(rk->rk_eos.
+                                                           txn_state));
+                        err = RD_KAFKA_RESP_ERR__STATE;
+                }
+                rd_kafka_wrunlock(rk);
+                goto done;
         }
 
-        rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_WAIT_PID);
+        if (do_start)
+                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_WAIT_PID);
 
         rd_kafka_wrunlock(rk);
 
-        rd_kafka_idemp_start(rk, rd_true/*immediately*/);
+        rd_kafka_txn_set_op_and_timeout(rk, rko, rko->rko_u.txn.timeout_ms);
 
-        /* Store the op for later reply when we've retrieved a Pid,
-         * or failed to. */
-        rk->rk_eos.txn_curr_rko = rko;
+        if (do_start)
+                rd_kafka_idemp_start(rk, rd_true/*immediately*/);
 
         return RD_KAFKA_OP_RES_KEEP; /* input rko is used for reply */
 
- err:
+ done:
         rko->rko_err = err;
-        rko->rko_u.txn.errstr = rd_strdup(errstr);
+        if (*errstr)
+                rko->rko_u.txn.errstr = rd_strdup(errstr);
 
         rd_kafka_replyq_enq(&rko->rko_replyq, rko, 0);
 
@@ -661,19 +817,24 @@ rd_kafka_txn_op_init_transactions (rd_kafka_t *rk,
 
 
 rd_kafka_resp_err_t
-rd_kafka_init_transactions (rd_kafka_t *rk,
+rd_kafka_init_transactions (rd_kafka_t *rk, int timeout_ms,
                             char *errstr, size_t errstr_size) {
-        rd_kafka_op_t *reply;
+        rd_kafka_op_t *rko, *reply;
         rd_kafka_resp_err_t err;
+
+        if (timeout_ms < 1) {
+                rd_snprintf(errstr, errstr_size, "Invalid timeout");
+                return RD_KAFKA_RESP_ERR__INVALID_ARG;
+        }
 
         if ((err = rd_kafka_ensure_transactional(rk, errstr, errstr_size)))
                 return err;
 
-        reply = rd_kafka_op_req(
-                rk->rk_ops,
-                rd_kafka_op_new_cb(rk, RD_KAFKA_OP_TXN,
-                                   rd_kafka_txn_op_init_transactions),
-                RD_POLL_INFINITE);
+        rko = rd_kafka_op_new_cb(rk, RD_KAFKA_OP_TXN,
+                                 rd_kafka_txn_op_init_transactions);
+        rko->rko_u.txn.timeout_ms = timeout_ms;
+
+        reply = rd_kafka_op_req(rk->rk_ops, rko, RD_POLL_INFINITE);
 
         if ((err = reply->rko_err))
                 rd_snprintf(errstr, errstr_size, "%s",
@@ -872,13 +1033,10 @@ static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
                 rd_kafka_topic_partition_list_destroy(partitions);
 
         if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
-                rd_kafka_set_fatal_error(rk, err,
-                                         "Failed to commit offsets to "
-                                         "transaction: %s",
-                                         rd_kafka_err2str(err));
-                rd_kafka_wrlock(rk);
-                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
-                rd_kafka_wrunlock(rk);
+                rd_kafka_txn_set_fatal_error(rk, err,
+                                             "Failed to commit offsets to "
+                                             "transaction: %s",
+                                             rd_kafka_err2str(err));
 
         } else if (actions & RD_KAFKA_ERR_ACTION_REFRESH) {
                 /* Requery for coordinator? */
@@ -1041,13 +1199,10 @@ static void rd_kafka_txn_handle_AddOffsetsToTxn (rd_kafka_t *rk,
                    rd_kafka_err2name(err), actions);
 
         if (actions & RD_KAFKA_ERR_ACTION_FATAL) {
-                rd_kafka_set_fatal_error(rk, err,
-                                         "Failed to add offsets to "
-                                         "transaction: %s",
-                                         rd_kafka_err2str(err));
-                rd_kafka_wrlock(rk);
-                rd_kafka_txn_set_state(rk, RD_KAFKA_TXN_STATE_FATAL_ERROR);
-                rd_kafka_wrunlock(rk);
+                rd_kafka_txn_set_fatal_error(rk, err,
+                                             "Failed to add offsets to "
+                                             "transaction: %s",
+                                             rd_kafka_err2str(err));
 
         } else if (actions & RD_KAFKA_ERR_ACTION_REFRESH) {
                 /* Requery for coordinator? */
@@ -1336,7 +1491,7 @@ rd_kafka_txn_op_commit_transaction (rd_kafka_t *rk,
                      errstr, sizeof(errstr))))
                 goto err;
 
-        if (rk->rk_eos.txn_curr_rko) {
+        if (rk->rk_eos.txn_curr_op) {
                 /* This might happen if application is calling conflicting
                  * transactional APIs simultaneously from different threads. */
                 rd_snprintf(errstr, sizeof(errstr),
@@ -1371,7 +1526,7 @@ rd_kafka_txn_op_commit_transaction (rd_kafka_t *rk,
 
         /* Store the op for later reply when we've received a response
          * for the EndTxn request. */
-        rk->rk_eos.txn_curr_rko = rko;
+        rk->rk_eos.txn_curr_op = rko;
 
         rd_kafka_wrunlock(rk);
 
@@ -1409,7 +1564,7 @@ rd_kafka_txn_op_begin_commit (rd_kafka_t *rk,
                      errstr, sizeof(errstr))))
                 goto done;
 
-        if (rk->rk_eos.txn_curr_rko) {
+        if (rk->rk_eos.txn_curr_op) {
                 /* This might happen if application is calling conflicting
                  * transactional APIs simultaneously from different threads. */
                 rd_snprintf(errstr, sizeof(errstr),
@@ -1548,7 +1703,7 @@ rd_kafka_txn_op_abort_transaction (rd_kafka_t *rk,
                      errstr, sizeof(errstr))))
                 goto err;
 
-        if (rk->rk_eos.txn_curr_rko) {
+        if (rk->rk_eos.txn_curr_op) {
                 /* This might happen if application is calling conflicting
                  * transactional APIs simultaneously from different threads. */
                 rd_snprintf(errstr, sizeof(errstr),
@@ -1588,7 +1743,7 @@ rd_kafka_txn_op_abort_transaction (rd_kafka_t *rk,
 
         /* Store the op for later reply when we've received a response
          * for the EndTxn request. */
-        rk->rk_eos.txn_curr_rko = rko;
+        rk->rk_eos.txn_curr_op = rko;
 
         rd_kafka_wrunlock(rk);
 
@@ -1680,6 +1835,54 @@ rd_kafka_abort_transaction (rd_kafka_t *rk,
 }
 
 
+
+/**
+ * @brief Op timeout callback.
+ *
+ * @locality rdkafka main thread
+ * @locks none
+ */
+static void rd_kafka_txn_op_timeout_cb (rd_kafka_timers_t *rkts, void *arg) {
+        rd_kafka_t *rk = arg;
+        rd_kafka_txn_state_t state, new_state;
+        rd_kafka_op_cb_t *handler;
+
+        rd_assert(rk->rk_eos.txn_curr_op);
+
+        handler = rk->rk_eos.txn_curr_op->rko_op_cb;
+
+        rd_kafka_rdlock(rk);
+        new_state = state = rk->rk_eos.txn_state;
+        rd_kafka_rdunlock(rk);
+
+        rd_kafka_txn_reply_app(rk, RD_KAFKA_RESP_ERR__TIMED_OUT,
+                               "Operation timed out in state %s",
+                               rd_kafka_txn_state2str(state));
+
+        /* Properly handle the timeout based on what the operation was
+         * (identified by handler), and the current state. */
+
+        if (handler == rd_kafka_txn_op_init_transactions) {
+                /* init_transactions() timeout are ignored by the
+                 * internal logic itself:
+                 * the PID acquisition of the PID will continue in the
+                 * background.
+                 * This allows a sub-sequent call to init_transactions()
+                 * to continue the wait for completion. */
+
+
+        } else {
+
+
+        }
+
+
+        if (new_state != state) {
+                rd_kafka_wrlock(rk);
+                rd_kafka_txn_set_state(rk, new_state);
+                rd_kafka_wrunlock(rk);
+        }
+}
 
 
 

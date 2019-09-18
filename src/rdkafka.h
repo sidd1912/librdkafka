@@ -6238,7 +6238,7 @@ rd_kafka_oauthbearer_set_token_failure (rd_kafka_t *rk, const char *errstr);
  *
  * This function ensures any transactions initiated by previous instances
  * of the producer with the same \c transactional.id are completed.
- * If the previous instance had failed with a transaction in progress, then the
+ * If the previous instance failed with a transaction in progress the
  * previous transaction will be aborted.
  *
  * If the last transaction had begun completion (following transaction commit)
@@ -6247,41 +6247,44 @@ rd_kafka_oauthbearer_set_token_failure (rd_kafka_t *rk, const char *errstr);
  *
  * When any previous transactions have been fenced this function
  * will acquire the internal producer id and epoch, used in all future
- * transactional messages issued by this producer.
+ * transactional messages issued by this producer instance.
  *
- * The producer has \c transactional.timeout.ms to perform at least one of
- * the following operations to avoid timing out the transaction on the broker:
+ * Upon successful return from this function the application has to perform at
+ * least one of the following operations within \c transactional.timeout.ms to
+ * avoid timing out the transaction on the broker:
  *   * rd_kafka_produce() (et.al)
  *   * rd_kafka_send_offsets_to_transaction()
  *   * rd_kafka_commit_transaction()
  *   * rd_kafka_abort_transaction()
  *
  * @param rk Producer instance.
+ * @param timeout_ms The maximum time to block. On timeout the operation
+ *                   may continue in the background, depending on state,
+ *                   and it is okay to call init_transactions() again.
  * @param errstr A human readable error string (nul-terminated) is written to
  *               this location that must be of at least \p errstr_size bytes.
  *               The \p errstr is only written to if there is a fatal error.
  * @param errstr_size Writable size in \p errstr.
  *
- * @remark This function may block up to 60 seconds.
+ * @remark This function may block up to \p timeout_ms milliseconds.
  *
  * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success,
  *          RD_KAFKA_RESP_ERR__TIMED_OUT if the transaction coordinator
- *          could be not be contacted within the 60 second timeout,
+ *          could be not be contacted within \p timeout_ms (retryable),
  *          RD_KAFKA_RESP_ERR_COORDINATOR_NOT_AVAILABLE if the transaction
- *          coordinator is not available,
+ *          coordinator is not available (retryable),
  *          RD_KAFKA_RESP_ERR_CONCURRENT_TRANSACTIONS if a previous transaction
- *          would not complete within the 60 second timeout,
- *          RD_KAFKA_RESP_ERR__STATE if transactions are already initialized,
+ *          would not complete within \p timeout_ms (retryable),
+ *          RD_KAFKA_RESP_ERR__STATE if transactions have already been started
+ *          or upon fatal error,
  *          RD_KAFKA_RESP_ERR__NOT_CONFIGURED if transactions have not been
  *          configured for the producer instance,
- *          RD_KAFKA_RESP_ERR__INVALID_ARG if \p rk is not a producer instance.
- *
- * All errors except ERR__STATE and ERR__NOT_CONFIGURED are retryable.
+ *          RD_KAFKA_RESP_ERR__INVALID_ARG if \p rk is not a producer instance,
+ *          or \p timeout_ms is out of range.
  */
-
 RD_EXPORT
 rd_kafka_resp_err_t
-rd_kafka_init_transactions (rd_kafka_t *rk,
+rd_kafka_init_transactions (rd_kafka_t *rk, int timeout_ms,
                             char *errstr, size_t errstr_size);
 
 RD_EXPORT

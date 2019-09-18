@@ -118,6 +118,7 @@ typedef RD_SHARED_PTR_TYPE(, struct rd_kafka_itopic_s) shptr_rd_kafka_itopic_t;
 typedef enum {
         RD_KAFKA_IDEMP_STATE_INIT,      /**< Initial state */
         RD_KAFKA_IDEMP_STATE_TERM,      /**< Instance is terminating */
+        RD_KAFKA_IDEMP_STATE_FATAL_ERROR, /**< A fatal error has been raised */
         RD_KAFKA_IDEMP_STATE_QUERY_COORD, /**< Query Transaction coordinator */
         RD_KAFKA_IDEMP_STATE_WAIT_TRANSPORT, /**< Waiting for coordinator to
                                               *   become available. */
@@ -142,6 +143,7 @@ rd_kafka_idemp_state2str (rd_kafka_idemp_state_t state) {
         static const char *names[] = {
                 "Init",
                 "Terminate",
+                "FatalError",
                 "QueryCoord",
                 "WaitTransport",
                 "RequestPID",
@@ -160,14 +162,24 @@ rd_kafka_idemp_state2str (rd_kafka_idemp_state_t state) {
  * @enum Transactional Producer state
  */
 typedef enum {
+        /**< Initial state */
         RD_KAFKA_TXN_STATE_INIT,
+        /**< Awaiting PID to be acquired by rdkafka_idempotence.c */
         RD_KAFKA_TXN_STATE_WAIT_PID,
+        /**< PID acquired, no active transaction. */
         RD_KAFKA_TXN_STATE_READY,
+        /**< begin_transaction() has been called. */
         RD_KAFKA_TXN_STATE_IN_TRANSACTION,
+        /**< commit_transaction() has been called. */
         RD_KAFKA_TXN_STATE_BEGIN_COMMIT,
+        /**< commit_transaction() has been called and all outstanding
+         *   messages, partitions, and offsets have been sent. */
         RD_KAFKA_TXN_STATE_COMMITTING_TRANSACTION,
+        /**< abort_transaction() has been called. */
         RD_KAFKA_TXN_STATE_ABORTING_TRANSACTION,
+        /**< An abortable error has occurred. */
         RD_KAFKA_TXN_STATE_ABORTABLE_ERROR,
+        /* A fatal error has occured. */
         RD_KAFKA_TXN_STATE_FATAL_ERROR
 } rd_kafka_txn_state_t;
 
@@ -364,13 +376,16 @@ struct rd_kafka_s {
                                                           *   the broker state
                                                           *   changes. */
 
-                rd_kafka_op_t *txn_curr_rko;    /**< Blocking application call
+                rd_kafka_op_t *txn_curr_op;     /**< Blocking application call
                                                  *   currently being handled,
                                                  *   e.g init_transactions() */
 
+                rd_kafka_timer_t txn_curr_op_tmr; /**< Timeout timer for
+                                                   *   txn_curr_op. */
+
                 int txn_req_cnt;                /**< Number of transaction
                                                  *   requests sent.
-                                                 *   This is set when a
+                                                 *   This is incremented when a
                                                  *   AddPartitionsToTxn or
                                                  *   AddOffsetsToTxn request
                                                  *   has been sent for the
@@ -396,6 +411,12 @@ struct rd_kafka_s {
 
                 /**< Partitions added and registered to transaction. */
                 rd_kafka_toppar_tqhead_t txn_rktps;
+
+                /**< Current transaction error. */
+                rd_kafka_resp_err_t txn_err;
+
+                /**< Current transaction error string, if any. */
+                char               *txn_errstr;
         } rk_eos;
 
         rd_kafka_coord_cache_t   rk_coord_cache; /**< Coordinator cache */

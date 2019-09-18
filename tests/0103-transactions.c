@@ -42,7 +42,7 @@
  *        e.g., no consumer offsets to commit with transaction.
  */
 static void do_test_basic_producer_txn (void) {
-        const char *topic = test_mk_topic_name("0101_transactions", 1);
+        const char *topic = test_mk_topic_name("0103_transactions", 1);
         const int partition_cnt = 4;
 #define _TXNCNT 4
         struct {
@@ -93,7 +93,8 @@ static void do_test_basic_producer_txn (void) {
         test_consumer_wait_assignment(c);
 
         /* Init transactions */
-        TEST_CALL__(rd_kafka_init_transactions(p, errstr, sizeof(errstr)));
+        TEST_CALL__(rd_kafka_init_transactions(p, 30*1000,
+                                               errstr, sizeof(errstr)));
 
         for (i = 0 ; i < _TXNCNT ; i++) {
                 int wait_msgcnt = 0;
@@ -215,9 +216,9 @@ static void destroy_messages (rd_kafka_message_t **msgs, int msgcnt) {
  */
 void do_test_consumer_producer_txn (void) {
         char *input_topic =
-                rd_strdup(test_mk_topic_name("0101-transactions-input", 1));
+                rd_strdup(test_mk_topic_name("0103-transactions-input", 1));
         char *output_topic =
-                rd_strdup(test_mk_topic_name("0101-transactions-output", 1));
+                rd_strdup(test_mk_topic_name("0103-transactions-output", 1));
         const char *c1_groupid = input_topic;
         const char *c2_groupid = output_topic;
         rd_kafka_t *p1, *p2, *c1, *c2;
@@ -269,7 +270,8 @@ void do_test_consumer_producer_txn (void) {
         test_create_topic(p1, output_topic, 4, 3);
 
         /* Seed input topic with messages */
-        TEST_CALL__(rd_kafka_init_transactions(p1, errstr, sizeof(errstr)));
+        TEST_CALL__(rd_kafka_init_transactions(p1, 30*1000,
+                                               errstr, sizeof(errstr)));
         TEST_CALL__(rd_kafka_begin_transaction(p1, errstr, sizeof(errstr)));
         test_produce_msgs2(p1, input_topic, testid, RD_KAFKA_PARTITION_UA,
                            0, msgcnt, NULL, 0);
@@ -290,7 +292,8 @@ void do_test_consumer_producer_txn (void) {
         test_conf_set(tmpconf, "transactional.id", output_topic);
         rd_kafka_conf_set_dr_msg_cb(tmpconf, test_dr_msg_cb);
         p2 = test_create_handle(RD_KAFKA_PRODUCER, tmpconf);
-        TEST_CALL__(rd_kafka_init_transactions(p2, errstr, sizeof(errstr)));
+        TEST_CALL__(rd_kafka_init_transactions(p2, 30*1000,
+                                               errstr, sizeof(errstr)));
 
         /* Create Consumer 2: reading msgs from output_topic (Producer 2) */
         tmpconf = rd_kafka_conf_dup(conf);
@@ -426,12 +429,176 @@ void do_test_consumer_producer_txn (void) {
 }
 
 
+/**
+ * @brief Testing misuse of the transaction API.
+ */
+static void do_test_misuse_txn (void) {
+        const char *topic = test_mk_topic_name("0103-test_misuse_txn", 1);
+        rd_kafka_t *p;
+        rd_kafka_conf_t *conf;
+        rd_kafka_resp_err_t err;
+        char errstr[512];
+        int i;
 
-int main_0101_transactions (int argc, char **argv) {
+        /*
+         * transaction.timeout.ms out of range (from broker's point of view)
+         */
+        test_conf_init(&conf, NULL, 10);
+
+        test_conf_set(conf, "transactional.id", topic);
+        test_conf_set(conf, "transaction.timeout.ms", "2147483647");
+
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        err = rd_kafka_init_transactions(p, 10*1000, errstr, sizeof(errstr));
+        TEST_ASSERT(err == RD_KAFKA_RESP_ERR_INVALID_TRANSACTION_TIMEOUT,
+                    "Expected ERR_INVALID_TRANSACTION_TIMEOUT, not %s: %s",
+                    rd_kafka_err2name(err),
+                    err ? errstr : "");
+
+        rd_kafka_destroy(p);
+
+
+        /*
+         * Multiple calls to init_transactions(): finish on first.
+         */
+        test_conf_init(&conf, NULL, 10);
+
+        test_conf_set(conf, "transactional.id", topic);
+
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        TEST_CALL__(rd_kafka_init_transactions(p, 30*1000,
+                                               errstr, sizeof(errstr)));
+
+        TEST_CALL__(rd_kafka_init_transactions(p, 1,
+                                               errstr, sizeof(errstr)));
+
+        TEST_CALL__(rd_kafka_begin_transaction(p, errstr, sizeof(errstr)));
+
+        err = rd_kafka_init_transactions(p, 3*1000, errstr, sizeof(errstr));
+        TEST_ASSERT(err == RD_KAFKA_RESP_ERR__STATE,
+                    "Expected ERR__STATE, not %s: %s",
+                    rd_kafka_err2name(err),
+                    err ? errstr : "");
+
+        rd_kafka_destroy(p);
+
+
+        /*
+         * Multiple calls to init_transactions(): semi-nonblocking
+         */
+        test_conf_init(&conf, NULL, 10);
+
+        test_conf_set(conf, "transactional.id", topic);
+
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+
+        err = rd_kafka_init_transactions(p, 1, errstr, sizeof(errstr));
+        TEST_ASSERT(err == RD_KAFKA_RESP_ERR__TIMED_OUT,
+                    "Expected ERR__TIMED_OUT, not %s: %s",
+                    rd_kafka_err2name(err),
+                    err ? errstr : "");
+
+        TEST_CALL__(rd_kafka_init_transactions(p, 30*1000,
+                                               errstr, sizeof(errstr)));
+
+        rd_kafka_destroy(p);
+
+
+        /*
+         * Multiple calls to init_transactions(): hysterical amount
+         */
+        test_conf_init(&conf, NULL, 10);
+
+        test_conf_set(conf, "transactional.id", topic);
+
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        /* Ignore errors */
+        for (i = 0 ; i < 1000 ; i++)
+                rd_kafka_init_transactions(p, 1, NULL, 0);
+
+        /* This one must succeed */
+        TEST_CALL__(rd_kafka_init_transactions(p, 30*1000,
+                                               errstr, sizeof(errstr)));
+
+        rd_kafka_destroy(p);
+
+}
+
+int main_0103_transactions (int argc, char **argv) {
+
+        do_test_misuse_txn();
 
         do_test_basic_producer_txn();
 
         do_test_consumer_producer_txn();
+
+        return 0;
+}
+
+
+
+/**
+ * @brief Transaction tests that don't require a broker.
+ */
+static void do_test_txn_local (void) {
+        rd_kafka_conf_t *conf;
+        rd_kafka_t *p;
+        rd_kafka_resp_err_t err;
+        char errstr[512];
+        test_timing_t t_init;
+
+        /*
+         * No transactional.id, init_transactions() should fail.
+         */
+        conf = rd_kafka_conf_new();
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        err = rd_kafka_init_transactions(p, 10, NULL, 0);
+        TEST_ASSERT(err == RD_KAFKA_RESP_ERR__NOT_CONFIGURED,
+                    "Expected ERR__NOT_CONFIGURED, not %s",
+                    rd_kafka_err2name(err));
+
+        rd_kafka_destroy(p);
+
+
+        /*
+         * No brokers, init_transactions() should time out according
+         * to the timeout.
+         */
+        int timeout_ms = 7*1000;
+
+        conf = rd_kafka_conf_new();
+        test_conf_set(conf, "transactional.id", "test");
+        p = test_create_handle(RD_KAFKA_PRODUCER, conf);
+
+        TEST_SAY("Waiting for init_transactions() timeout %d ms\n",
+                 timeout_ms);
+
+        TIMING_START(&t_init, "init_transactions()");
+        err = rd_kafka_init_transactions(p, timeout_ms,
+                                         errstr, sizeof(errstr));
+        TIMING_STOP(&t_init);
+        TEST_ASSERT(err == RD_KAFKA_RESP_ERR__TIMED_OUT,
+                    "Expected RD_KAFKA_RESP_ERR__TIMED_OUT, "
+                    "not %s: %s",
+                    rd_kafka_err2name(err), err ? errstr : "");
+
+        TEST_SAY("init_transactions() failed as expected: %s\n",
+                 errstr);
+
+        TIMING_ASSERT(&t_init, timeout_ms - 2000, timeout_ms + 5000);
+
+        rd_kafka_destroy(p);
+}
+
+
+int main_0103_transactions_local (int argc, char **argv) {
+
+        do_test_txn_local();
 
         return 0;
 }

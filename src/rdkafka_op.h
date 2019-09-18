@@ -434,6 +434,7 @@ struct rd_kafka_op_s {
                 struct {
                         char *errstr;   /**< Error string, if rko_err is set */
                         char *group_id; /**< Consumer group id for commits */
+                        int   timeout_ms; /**< Operation timeout */
                         /**< Offsets to commit */
                         rd_kafka_topic_partition_list_t *offsets;
                 } txn;

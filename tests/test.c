@@ -197,7 +197,8 @@ _TEST_DECL(0097_ssl_verify);
 _TEST_DECL(0098_consumer_txn);
 _TEST_DECL(0099_commit_metadata);
 _TEST_DECL(0100_thread_interceptors);
-_TEST_DECL(0101_transactions);
+_TEST_DECL(0103_transactions_local);
+_TEST_DECL(0103_transactions);
 
 /* Manual tests */
 _TEST_DECL(8000_idle);
@@ -327,7 +328,8 @@ struct test tests[] = {
         _TEST(0098_consumer_txn, 0),
         _TEST(0099_commit_metadata, 0),
         _TEST(0100_thread_interceptors, TEST_F_LOCAL),
-        _TEST(0101_transactions, 0, TEST_BRKVER(0,11,0,0)),
+        _TEST(0103_transactions_local, TEST_F_LOCAL),
+        _TEST(0103_transactions, 0, TEST_BRKVER(0,11,0,0)),
 
         /* Manual tests */
         _TEST(8000_idle, TEST_F_MANUAL),
@@ -1413,7 +1415,7 @@ int main(int argc, char **argv) {
         test_init();
 
 #ifndef _MSC_VER
-        //signal(SIGINT, test_sig_term);
+        signal(SIGINT, test_sig_term);
 #endif
         tests_to_run = test_getenv("TESTS", NULL);
         tmpver = test_getenv("TEST_KAFKA_VERSION", NULL);
