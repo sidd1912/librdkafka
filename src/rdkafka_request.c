@@ -121,10 +121,6 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
         {
         case RD_KAFKA_RESP_ERR_NO_ERROR:
                 break;
-        case RD_KAFKA_RESP_ERR_MEMBER_ID_REQUIRED:
-                actions |= RD_KAFKA_ERR_ACTION_IGNORE|
-                        RD_KAFKA_ERR_ACTION_MSG_NOT_PERSISTED;
-                break;
         case RD_KAFKA_RESP_ERR_LEADER_NOT_AVAILABLE:
         case RD_KAFKA_RESP_ERR_NOT_LEADER_FOR_PARTITION:
         case RD_KAFKA_RESP_ERR_BROKER_NOT_AVAILABLE:
@@ -147,7 +143,7 @@ int rd_kafka_err_action (rd_kafka_broker_t *rkb,
         case RD_KAFKA_RESP_ERR__TIMED_OUT_QUEUE:
                 /* Client-side wait-response/in-queue timeout */
         case RD_KAFKA_RESP_ERR_NOT_ENOUGH_REPLICAS:
-        case RD_KAFKA_RESP_ERR__TRANSPORT:        
+        case RD_KAFKA_RESP_ERR__TRANSPORT:
                 actions |= RD_KAFKA_ERR_ACTION_RETRY|
                         RD_KAFKA_ERR_ACTION_MSG_NOT_PERSISTED;
                 break;
@@ -873,7 +869,7 @@ int rd_kafka_OffsetCommitRequest (rd_kafka_broker_t *rkb,
 	int tot_PartCnt = 0;
         int i;
 
-        int16_t ApiVersion = 0;
+        int16_t ApiVersion;
         int features;
 
         ApiVersion = rd_kafka_broker_ApiVersion_supported(rkb,
@@ -898,12 +894,11 @@ int rd_kafka_OffsetCommitRequest (rd_kafka_broker_t *rkb,
         }
 
         /* v7: GroupInstanceId */
-        if (ApiVersion >= 7) {
+        if (ApiVersion >= 7)
                 rd_kafka_buf_write_kstr(rkbuf, rkcg->rkcg_group_instance_id);
-        }
 
         /* v2-4: RetentionTime */
-        if (ApiVersion > 2 && ApiVersion <= 4)
+        if (ApiVersion >= 2 && ApiVersion <= 4)
                         rd_kafka_buf_write_i64(rkbuf, -1);
 
         /* Sort offsets by topic */
@@ -945,7 +940,7 @@ int rd_kafka_OffsetCommitRequest (rd_kafka_broker_t *rkb,
                 rd_kafka_buf_write_i64(rkbuf, rktpar->offset);
 
                 /* v6: KIP-101 CommittedLeaderEpoch */
-                if(ApiVersion >= 6)
+                if (ApiVersion >= 6)
                         rd_kafka_buf_write_i32(rkbuf, -1);
 
                 /* v1: TimeStamp */
@@ -1066,7 +1061,7 @@ void rd_kafka_SyncGroupRequest (rd_kafka_broker_t *rkb,
                                 void *opaque) {
         rd_kafka_buf_t *rkbuf;
         int i;
-        int16_t ApiVersion = 0;
+        int16_t ApiVersion;
         int features;
 
         ApiVersion = rd_kafka_broker_ApiVersion_supported(rkb,
@@ -1267,10 +1262,10 @@ void rd_kafka_JoinGroupRequest (rd_kafka_broker_t *rkb,
                         (rd_ts_t)86400 * 1000 * 1000, 0) > 0)
                 rd_rkb_log(rkb, LOG_NOTICE, "MAXPOLL",
                            "Broker does not support KIP-345 "
-                           "(requires Apache Kafka >= v0.2.3.0): "
+                           "(requires Apache Kafka >= v2.3.0): "
                            "consumer configuration "
                            "`group.instance.id` (%s) "
-                           "will not take effect.",
+                           "will not take effect",
                            rk->rk_conf.group_instance_id);
 
         /* Absolute timeout */
