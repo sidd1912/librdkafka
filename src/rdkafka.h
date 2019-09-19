@@ -2542,20 +2542,6 @@ char *rd_kafka_memberid (const rd_kafka_t *rk);
 
 
 /**
- * @brief Returns this client's user-assigned group instance id
- *
- * @remark This requires the high-level KafkaConsumer
- *
- * @returns An allocated string containing the current user-assigned group
- *          instance id, or NULL if not available.
- *          The application must free the string with \p free() or
- *          rd_kafka_mem_free()
- */
-RD_EXPORT
-char *rd_kafka_group_instance_id (const rd_kafka_t *rk);
-
-
-/**
  * @brief Returns the ClusterId as reported in broker metadata.
  *
  * @param timeout_ms If there is no cached value from metadata retrieval

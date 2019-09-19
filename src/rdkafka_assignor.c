@@ -59,7 +59,7 @@ void rd_kafka_group_member_clear (rd_kafka_group_member_t *rkgm) {
 
 
 /**
- * Group member comparator (takes rd_kafka_group_member_t *)
+ * @brief Group member comparator (takes rd_kafka_group_member_t *)
  */
 int rd_kafka_group_member_cmp (const void *_a, const void *_b) {
         const rd_kafka_group_member_t *a =

@@ -245,8 +245,6 @@ typedef struct rd_kafka_cgrp_s {
 
 
 
-#define RD_KAFKA_CGRP_IS_STATIC_MEMBER(rkcg) \
-        !RD_KAFKAP_STR_IS_NULL(rkcg->rkcg_group_instance_id)
 
 #define rd_kafka_cgrp_lock(rkcg)    mtx_lock(&(rkcg)->rkcg_lock)
 #define rd_kafka_cgrp_unlock(rkcg)  mtx_unlock(&(rkcg)->rkcg_lock)
@@ -255,6 +253,12 @@ typedef struct rd_kafka_cgrp_s {
 #define RD_KAFKA_CGRP_BROKER_IS_COORD(rkcg,rkb)          \
         ((rkcg)->rkcg_coord_id != -1 &&                  \
          (rkcg)->rkcg_coord_id == (rkb)->rkb_nodeid)
+
+/**
+ * @returns true if cgrp is using static group membership
+ */
+#define RD_KAFKA_CGRP_IS_STATIC_MEMBER(rkcg) \
+        !RD_KAFKAP_STR_IS_NULL((rkcg)->rkcg_group_instance_id)
 
 extern const char *rd_kafka_cgrp_state_names[];
 extern const char *rd_kafka_cgrp_join_state_names[];
