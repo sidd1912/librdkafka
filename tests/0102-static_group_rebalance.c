@@ -134,12 +134,13 @@ int main_0102_static_group_rebalance (int argc, char **argv) {
         rd_kafka_conf_t *conf;
 
         const int msgcnt = 100;
-        const char *topic = test_mk_topic_name("0101_static_group_rebalance", 1);
+        const char *topic = test_mk_topic_name("0102_static_group_rebalance", 1);
+        const char *subscription = tsprintf("^%s.*", topic);
         _consumer_t c[_CONSUMER_CNT] = RD_ZERO_INIT;
 
         test_conf_init(&conf, NULL, 60);
 
-        test_conf_set(conf, "session.timeout.ms", "1000");
+        test_conf_set(conf, "session.timeout.ms", "5000");
         test_conf_set(conf, "auto.offset.reset", "earliest");
         test_conf_set(conf, "topic.metadata.refresh.interval.ms", "500");
 
@@ -156,8 +157,8 @@ int main_0102_static_group_rebalance (int argc, char **argv) {
         c[0].max_rebalance_cnt = 1;
         c[1].max_rebalance_cnt = 1;
 
-        test_consumer_subscribe(c[0].rk, rd_strdup(tsprintf("^%s.*", topic)));
-        test_consumer_subscribe(c[1].rk, rd_strdup(tsprintf("^%s.*", topic)));
+        test_consumer_subscribe(c[0].rk, subscription);
+        test_consumer_subscribe(c[1].rk, subscription);
 
         test_create_topic(NULL, topic, 3, 1);
         test_produce_msgs_easy(topic, test_id_generate(), 0, msgcnt);
@@ -177,11 +178,11 @@ int main_0102_static_group_rebalance (int argc, char **argv) {
         c[1].max_rebalance_cnt++;
         c[1].rk = test_create_consumer("static", &rebalance_cb,
                                        conf, NULL);
-        test_consumer_subscribe(c[1].rk, rd_strdup(tsprintf("^%s.*", topic)));
+        test_consumer_subscribe(c[1].rk, subscription);
 
         /* Wait for c[1] to rejoin, serve c[0] ops */
         await_assignment(&c[1]);
-        do_consume(&c[0], 5/*5s*/);
+        do_consume(&c[0], 1/*5s*/);
 
         TEST_SAY("Creating a new topic.\n");
         /* Expanding the subscription forces a rebalance */
@@ -189,9 +190,9 @@ int main_0102_static_group_rebalance (int argc, char **argv) {
         c[1].max_rebalance_cnt++;
 
         /* The topic prefix uses the test id which is "random" */
-        test_create_topic(c[0].rk, rd_strdup(tsprintf("%snew", topic)), 1, 1);
-        do_consume(&c[0], 5/*5s*/);
-        do_consume(&c[1], 5/*5s*/);
+        test_create_topic(c[0].rk, tsprintf("%snew", topic), 1, 1);
+        do_consume(&c[0], 1);
+        do_consume(&c[1], 1/*1s*/);
         await_assignment(&c[0]);
 
         /* Wait until session.timeout.ms is exceeded to force a rebalance. */
@@ -202,8 +203,9 @@ int main_0102_static_group_rebalance (int argc, char **argv) {
         rd_kafka_destroy(c[1].rk);
 
         /* 2x heartbeat interval to give time for c[0] to recognize rebalance */
-        rd_sleep(6);
-        do_consume(&c[0], 2/*1s*/);
+        rd_sleep(9);
+
+        do_consume(&c[0], 1/*1s*/);
 
         TEST_ASSERT(c[0].assign_cnt == c[0].max_rebalance_cnt,
                     "c[0] rebalanced %d times, expected %d",

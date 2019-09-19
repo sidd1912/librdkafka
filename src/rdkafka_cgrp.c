@@ -90,12 +90,6 @@ rd_kafka_cgrp_max_poll_interval_check_tmr_cb (rd_kafka_timers_t *rkts,
 	 RD_KAFKA_CGRP_JOIN_STATE_WAIT_REVOKE_REBALANCE_CB)
 
 
-/**
- * @returns true if cgrp is using static group membership
- */
-#define RD_KAFKA_CGRP_IS_STATIC_MEMBER(rkcg) \
-        !RD_KAFKAP_STR_IS_NULL(rkcg->rkcg_group_instance_id)
-
 const char *rd_kafka_cgrp_state_names[] = {
         "init",
         "term",
@@ -881,7 +875,6 @@ static void rd_kafka_cgrp_handle_JoinGroup (rd_kafka_t *rk,
         int32_t member_cnt;
         int actions;
         int i_am_leader = 0;
-        char *my_member_id;
 
         if (err == RD_KAFKA_RESP_ERR__DESTROY)
                 return; /* Terminating */
@@ -928,9 +921,8 @@ static void rd_kafka_cgrp_handle_JoinGroup (rd_kafka_t *rk,
                      member_cnt,
                      ErrorCode ? rd_kafka_err2str(ErrorCode) : "(no error)");
 
-
-
         if (!ErrorCode) {
+                char *my_member_id;
                 RD_KAFKAP_STR_DUPA(&my_member_id, &MyMemberId);
                 rd_kafka_cgrp_set_member_id(rkcg, my_member_id);
                 rkcg->rkcg_generation_id = GenerationId;
@@ -969,11 +961,12 @@ static void rd_kafka_cgrp_handle_JoinGroup (rd_kafka_t *rk,
                         rd_kafka_buf_read_str(rkbuf, &MemberId);
                         if (request->rkbuf_reqhdr.ApiVersion >= 5)
                                 rd_kafka_buf_read_str(rkbuf, &GroupInstanceId);
-
                         rd_kafka_buf_read_bytes(rkbuf, &MemberMetadata);
+
                         rkgm = &members[sub_cnt];
                         rkgm->rkgm_member_id = rd_kafkap_str_copy(&MemberId);
-                        rkgm->rkgm_group_instance_id = rd_kafkap_str_copy(&GroupInstanceId);
+                        rkgm->rkgm_group_instance_id =
+                                rd_kafkap_str_copy(&GroupInstanceId);
                         rd_list_init(&rkgm->rkgm_eligible, 0, NULL);
 
                         if (rd_kafka_group_MemberMetadata_consumer_read(
@@ -1038,7 +1031,10 @@ err:
         actions = rd_kafka_err_action(rkb, ErrorCode, request,
                                       RD_KAFKA_ERR_ACTION_IGNORE,
                                       RD_KAFKA_RESP_ERR_UNKNOWN_MEMBER_ID,
+
+                                      RD_KAFKA_ERR_ACTION_IGNORE,
                                       RD_KAFKA_RESP_ERR_MEMBER_ID_REQUIRED,
+
                                       RD_KAFKA_ERR_ACTION_END);
 
         if (actions & RD_KAFKA_ERR_ACTION_REFRESH) {
@@ -1064,7 +1060,9 @@ err:
                 if (ErrorCode == RD_KAFKA_RESP_ERR_UNKNOWN_MEMBER_ID)
                         rd_kafka_cgrp_set_member_id(rkcg, "");
 
-                if(ErrorCode == RD_KAFKA_RESP_ERR_MEMBER_ID_REQUIRED) {
+                /* KIP-394 require member.id on initial join group request */
+                if (ErrorCode == RD_KAFKA_RESP_ERR_MEMBER_ID_REQUIRED) {
+                        char *my_member_id;
                         RD_KAFKAP_STR_DUPA(&my_member_id, &MyMemberId);
                         rd_kafka_cgrp_set_member_id(rkcg, my_member_id);
                 }
@@ -1376,7 +1374,6 @@ void rd_kafka_cgrp_handle_Heartbeat (rd_kafka_t *rk,
         rd_kafka_cgrp_t *rkcg = rk->rk_cgrp;
         const int log_decode_errors = LOG_ERR;
         int16_t ErrorCode = 0;
-        int_least32_t ThrottleTimeMs = 0;
         int actions;
 
         if (err) {
@@ -1388,7 +1385,7 @@ void rd_kafka_cgrp_handle_Heartbeat (rd_kafka_t *rk,
 
 
         if (request->rkbuf_reqhdr.ApiVersion >= 1)
-                rd_kafka_buf_read_i32(rkbuf, &ThrottleTimeMs);
+                rd_kafka_buf_read_throttle_time(rkbuf);
         rd_kafka_buf_read_i16(rkbuf, &ErrorCode);
 
 err:
@@ -1751,7 +1748,7 @@ rd_kafka_cgrp_partitions_fetch_start0 (rd_kafka_cgrp_t *rkcg,
                  * which would be costly (once per message), set up an
                  * intervalled timer that checks a timestamp
                  * (that is updated on ..poll()).
-                 * The timer interval is 2 hz
+                 * The timer interval is 2 hz.
                  *
                  * KIP-345 disables max.poll.interval.ms when
                  * using static group membership.
@@ -2231,7 +2228,7 @@ static void rd_kafka_cgrp_unassign_done (rd_kafka_cgrp_t *rkcg,
                 rkcg->rkcg_flags &= ~RD_KAFKA_CGRP_F_LEAVE_ON_UNASSIGN;
 
         /* KIP-345: Static group members do not send LeaveGroupRequests */
-        if(RD_KAFKA_CGRP_IS_STATIC_MEMBER(rkcg))
+        if (RD_KAFKA_CGRP_IS_STATIC_MEMBER(rkcg))
                 rkcg->rkcg_flags &= ~RD_KAFKA_CGRP_F_LEAVE_ON_UNASSIGN;
 
 	if (rkcg->rkcg_flags & RD_KAFKA_CGRP_F_LEAVE_ON_UNASSIGN) {
