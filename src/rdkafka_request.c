@@ -1211,6 +1211,8 @@ void rd_kafka_JoinGroupRequest (rd_kafka_broker_t *rkb,
                                          4 /* sessionTimeoutMs */ +
                                          4 /* rebalanceTimeoutMs */ +
                                          RD_KAFKAP_STR_SIZE(member_id) +
+                                         RD_KAFKAP_STR_SIZE(
+                                                 group_instance_id) +
                                          RD_KAFKAP_STR_SIZE(protocol_type) +
                                          4 /* array count GroupProtocols */ +
                                          (rd_list_cnt(topics) * 100));
