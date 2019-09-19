@@ -556,6 +556,9 @@ static void rd_kafka_cgrp_handle_LeaveGroup (rd_kafka_t *rk,
                 goto err;
         }
 
+        if (request->rkbuf_reqhdr.ApiVersion >= 1)
+                rd_kafka_buf_read_throttle_time(rkbuf);
+
         rd_kafka_buf_read_i16(rkbuf, &ErrorCode);
 
 err:

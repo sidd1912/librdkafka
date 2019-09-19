@@ -1312,7 +1312,7 @@ void rd_kafka_LeaveGroupRequest (rd_kafka_broker_t *rkb,
 
         ApiVersion = rd_kafka_broker_ApiVersion_supported(rkb,
                                                           RD_KAFKAP_LeaveGroup,
-                                                          0, 3,
+                                                          0, 1,
                                                           &features);
 
         rkbuf = rd_kafka_buf_new_request(rkb, RD_KAFKAP_LeaveGroup,
@@ -1320,15 +1320,7 @@ void rd_kafka_LeaveGroupRequest (rd_kafka_broker_t *rkb,
                                          RD_KAFKAP_STR_SIZE(group_id) +
                                          RD_KAFKAP_STR_SIZE(member_id));
         rd_kafka_buf_write_kstr(rkbuf, group_id);
-
-        if (ApiVersion >= 3) {
-                rd_kafka_buf_write_i32(rkbuf, 2);
-                rd_kafka_buf_write_kstr(rkbuf, member_id);
-                rd_kafka_buf_write_kstr(rkbuf, group_instance_id);
-        } else
-                rd_kafka_buf_write_kstr(rkbuf, member_id);
-
-
+        rd_kafka_buf_write_kstr(rkbuf, member_id);
         rd_kafka_buf_ApiVersion_set(rkbuf, ApiVersion, 0);
 
         /* LeaveGroupRequests are best-effort, the local consumer
