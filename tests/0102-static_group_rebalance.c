@@ -70,14 +70,14 @@ static void do_consume (_consumer_t *cons, int timeout_s) {
 }
 
 /* Serve op queue until we have an assignment */
-static void await_assignment (_consumer_t *rk_c) {
+static void await_assignment (_consumer_t *c) {
         TEST_SAY("Waiting for partition assignment\n");
         while (1) {
                 rd_kafka_topic_partition_list_t *parts = NULL;
 
-                do_consume(rk_c, 1/*1s*/);
+                do_consume(c, 1/*1s*/);
 
-                if (rd_kafka_assignment(rk_c->rk, &parts) !=
+                if (rd_kafka_assignment(c->rk, &parts) !=
                     RD_KAFKA_RESP_ERR_NO_ERROR ||
                     !parts || parts->cnt == 0) {
                         if (parts)
@@ -86,7 +86,7 @@ static void await_assignment (_consumer_t *rk_c) {
                 }
 
                 TEST_SAY("%s got assignment of %d partition(s)\n",
-                         rd_kafka_name(rk_c->rk), parts->cnt);
+                         rd_kafka_name(c->rk), parts->cnt);
                 rd_kafka_topic_partition_list_destroy(parts);
                 break;
         }
@@ -97,25 +97,25 @@ static void rebalance_cb (rd_kafka_t *rk,
                           rd_kafka_topic_partition_list_t *parts,
                           void *opaque) {
 
-        _consumer_t *rk_c = opaque;
+        _consumer_t *c = opaque;
 
         TEST_SAY("%s rebalance #%d/%d: %s: %d partition(s)\n",
                  rd_kafka_name(rk),
-                 rk_c->assign_cnt, rk_c->max_rebalance_cnt,
+                 c->assign_cnt, c->max_rebalance_cnt,
                  rd_kafka_err2name(err),
                  parts->cnt);
 
         switch (err)
         {
         case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
-                rk_c->assign_cnt++;
+                c->assign_cnt++;
 
                 rd_kafka_assign(rk, parts);
 
-                TEST_ASSERT(rk_c->assign_cnt <= rk_c->max_rebalance_cnt,
+                TEST_ASSERT(c->assign_cnt <= c->max_rebalance_cnt,
                             "%s rebalanced %d times, max was %d",
                             rd_kafka_name(rk),
-                            rk_c->assign_cnt, rk_c->max_rebalance_cnt);
+                            c->assign_cnt, c->max_rebalance_cnt);
                 break;  
 
         case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
