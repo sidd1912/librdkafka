@@ -1156,6 +1156,18 @@ The latest stored offset will be automatically committed every
 Broker based consumer groups (requires Apache Kafka broker >=0.9) are supported,
 see KafkaConsumer in rdkafka.h or rdkafkacpp.h
 
+##### Static Consumer groups
+
+By default Kafka consumer groups are rebalanced each time a new consumer joins 
+the group or an existing member leaves. This is what is known as a "dynamic" 
+membership consumer group. Apache Kafka >= 2.3.0, librdkafka >= 1.2.0, 
+introduces an additional concept to Kafka's consumer group semantics; 
+the "static" membership consumer group. Unlike dynamic consumer group members 
+static group members can leave and rejoin a group within the `session.timeout.ms` 
+without triggering a rebalance. 
+
+To read more about this newly introduce behavior checkout [KIP-345.](https://cwiki.apache.org/confluence/display/KAFKA/KIP-345%3A+Introduce+static+membership+protocol+to+reduce+consumer+rebalances) 
+
 
 ### Topics
 
