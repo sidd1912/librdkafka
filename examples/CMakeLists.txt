@@ -25,4 +25,4 @@ if(NOT WIN32)
     add_executable(kafkatest_verifiable_client kafkatest_verifiable_client.cpp)
     target_link_libraries(kafkatest_verifiable_client PUBLIC rdkafka++)
 endif(NOT WIN32)
-;lrmh;lm;m;e;;ene;n
+
